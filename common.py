@@ -379,18 +379,30 @@ def isi_tabel_proyeksi(
                 tabel_tampil.loc[kat, BULAN_KOLOM[:bulan_penuh_terakhir]].sum()
                 if bulan_penuh_terakhir else 0
             )
+            # Proyeksi cadangan berbasis run-rate realisasi TAHUN BERJALAN sejauh ini (dipakai
+            # kalau tidak ada histori SAMA SEKALI, ATAU sebagai batas bawah kalau model
+            # berbasis histori ternyata memprediksi lebih rendah dari yang sudah benar-benar
+            # terealisasi -- lihat catatan di bawah).
+            rerata_kat = actual_sum / bulan_penuh_terakhir if bulan_penuh_terakhir else 0
+            target_runrate = rerata_kat * 12
+            bentuk_runrate = np.full(12 - bulan_penuh_terakhir, rerata_kat)
+
             if proyeksi_kat is None:
-                # Tidak ada histori sama sekali -> fallback rata-rata realisasi tahun berjalan
-                rerata_kat = actual_sum / bulan_penuh_terakhir if bulan_penuh_terakhir else 0
-                bentuk_depan = np.full(12 - bulan_penuh_terakhir, rerata_kat)
-                target_tahun_penuh = rerata_kat * 12
+                target_tahun_penuh = target_runrate
+                bentuk_depan = bentuk_runrate
             else:
-                # Bentuk sebaran bulan-bulan sisa mengikuti pola historis (rerata tertimbang
-                # 50%-25%-12,5%-6,25%-6,25% dari tahun y-1..y-5), BUKAN dibagi rata -- supaya
-                # bulan yang secara historis realisasinya tinggi (mis. akhir tahun) tetap
-                # diproyeksikan tinggi, bukan disamaratakan.
-                bentuk_depan = proyeksi_kat[bulan_penuh_terakhir:]
-                target_tahun_penuh = proyeksi_kat.sum()
+                target_riwayat = proyeksi_kat.sum()
+                if target_runrate > target_riwayat:
+                    # Realisasi tahun berjalan sudah melampaui pola tahun-tahun sebelumnya (mis.
+                    # krn kenaikan pagu/percepatan belanja tahun ini) -- kalau tetap dipaksa
+                    # pakai target historis, sisa_target di bawah akan jadi 0 (atau bahkan
+                    # proyeksi per bulan jadi jauh lebih rendah dari rata-rata realisasi
+                    # berjalan). Pakai proyeksi run-rate sbg gantinya supaya masuk akal.
+                    target_tahun_penuh = target_runrate
+                    bentuk_depan = bentuk_runrate
+                else:
+                    target_tahun_penuh = target_riwayat
+                    bentuk_depan = proyeksi_kat[bulan_penuh_terakhir:]
 
             sisa_target = max(target_tahun_penuh - actual_sum, 0)
             total_bentuk_depan = bentuk_depan.sum()

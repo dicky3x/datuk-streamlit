@@ -272,6 +272,34 @@ fig_trend.add_trace(go.Scatter(
 fig_trend.update_layout(yaxis_title="Rupiah (per bulan)", xaxis_title=None)
 st.plotly_chart(fig_trend, use_container_width=True)
 
+_catatan_bulan_berjalan = ""
+if bulan_terakhir > bulan_penuh_terakhir:
+    _catatan_bulan_berjalan = (
+        f" Bulan {BULAN_LABEL.get(bulan_terakhir, '-')} sendiri masih berjalan (belum berakhir), "
+        "jadi titik & garisnya di grafik ini memakai proyeksi akhir bulan, bukan realisasi yang "
+        "baru tercatat sebagian sejauh ini."
+    )
+_label_batas = BULAN_LABEL.get(bulan_penuh_terakhir, "-") if bulan_penuh_terakhir else None
+
+if metode_proyeksi == "historis":
+    daftar_tahun_ket = ", ".join(str(t) for t in tahun_dipakai)
+    _batas_teks = f"Bulan setelah {_label_batas}" if _label_batas else "Seluruh bulan tahun ini"
+    st.caption(
+        "Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif) supaya terlihat bulan mana "
+        f"yang realisasinya naik/turun. {_batas_teks} adalah proyeksi yang dihitung dari rerata "
+        "tertimbang tingkat realisasi tahun-tahun sebelumnya (bobot 50%-25%-12,5%-6,25%-6,25% "
+        f"untuk tahun y-1 s.d. y-5) dikalikan pagu tahun {tahun}. Tahun historis yang tersedia & "
+        f"dipakai: {daftar_tahun_ket}.{_catatan_bulan_berjalan}"
+    )
+else:
+    _batas_teks = f"Bulan setelah {_label_batas}" if _label_batas else "Seluruh bulan tahun ini"
+    st.caption(
+        "Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif) supaya terlihat bulan mana "
+        f"yang realisasinya naik/turun. {_batas_teks} adalah proyeksi. Belum ada data historis "
+        f"(tahun sebelum {tahun}) untuk entitas ini, sehingga proyeksi memakai metode cadangan: "
+        f"rata-rata realisasi per bulan pada tahun berjalan dikalikan 12 bulan.{_catatan_bulan_berjalan}"
+    )
+
 # --------------------------------------------------------------------------
 # Tabel realisasi per bulan per jenis belanja (aktual vs proyeksi), ditranspose:
 # kolom = jenis belanja, baris = bulan (+ baris ringkasan total di bawah).
@@ -407,7 +435,20 @@ styled_tabel = (
     .format("{:.1f}%", subset=pd.IndexSlice[BARIS_PERSEN, :])
 )
 st.dataframe(styled_tabel, use_container_width=True)
-st.caption("🟨 Sel berwarna kuning = mengandung angka proyeksi (bulan yang belum berakhir).")
+st.caption(
+    "🟨 Sel berwarna kuning = mengandung angka proyeksi (bulan yang belum berakhir), dihitung "
+    "dari rerata tertimbang tingkat realisasi jenis belanja ini pada tahun-tahun sebelumnya "
+    "(lihat penjelasan di atas grafik tren) dikalikan pagu jenis belanja tahun berjalan. Khusus "
+    f"**{LABEL_BELANJA_PEGAWAI}**, proyeksi dihitung dari rerata tertimbang REALISASI bulanan "
+    "tahun-tahun sebelumnya secara langsung (bobot 50%-25%-12,5%-6,25%-6,25% untuk y-1 s.d. "
+    f"y-5), TANPA dibatasi maksimal pagu tahun berjalan -- karena realisasi {LABEL_BELANJA_PEGAWAI} "
+    "bisa saja melebihi pagu saat ini. Jika suatu jenis belanja belum punya histori, dipakai "
+    "rata-rata realisasi tahun berjalan sebagai cadangan. Baris \"Total Realisasi\" hanya "
+    "menjumlahkan uang yang sudah benar-benar terealisasi (bulan penuh saja), sedangkan baris "
+    "\"Total Realisasi + Proyeksi Akhir Tahun\" menjumlahkan realisasi ditambah estimasi "
+    "bulan-bulan yang belum berakhir/belum terjadi. Kolom PAGU & baris PAGU tidak ditandai "
+    "kuning karena berupa acuan, bukan proyeksi."
+)
 
 st.divider()
 
