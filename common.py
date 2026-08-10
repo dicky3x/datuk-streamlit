@@ -5,6 +5,7 @@ Modul bersama dipakai oleh Halaman 1 (app.py), Halaman 2 (pages/2_*.py), dan
 Halaman 3 (pages/3_*.py): loading data, login, format kode, proyeksi, dan helper Groq/KPI.
 """
 
+import gzip
 import os
 import subprocess
 from datetime import date, datetime as _dt
@@ -85,7 +86,48 @@ def fmt_dept(kode) -> str:
 
 @st.cache_data(show_spinner="Memuat data...")
 def load_data_from_csv(path: str) -> pd.DataFrame:
-    return pd.read_csv(path)
+    try:
+        return pd.read_csv(path)
+    except Exception as e:
+        # File data utama ini krusial (semua halaman butuh ini) -- kalau gagal dibaca, kasih
+        # diagnosis & langkah perbaikan yang jelas, bukan cuma crash generik Streamlit Cloud
+        # yang errornya "redacted". Dibedakan dulu: file .gz-nya sendiri yang rusak (gagal
+        # didekompresi total), atau isi CSV di dalamnya yang bermasalah (gz-nya masih valid) --
+        # keduanya biasanya berakar dari sebab yang sama: git/GitHub mengubah isi file biner ini
+        # (mis. konversi CRLF/LF) saat di-commit/upload.
+        diagnosis = ""
+        if path.endswith(".gz"):
+            try:
+                with gzip.open(path, "rb") as f:
+                    f.read()
+                diagnosis = (
+                    "Diagnosis: file `.gz`-nya BISA didekompresi (jadi bukan rusak total), tapi "
+                    "isi CSV di dalamnya gagal diparse -- kemungkinan besar sebagian byte di "
+                    "dalam file berubah (mis. karena git/GitHub mengonversi line-ending)."
+                )
+            except Exception as e2:
+                diagnosis = (
+                    f"Diagnosis: file `.gz`-nya SENDIRI tidak valid/rusak "
+                    f"({type(e2).__name__}: {e2})."
+                )
+        st.error(
+            f"❌ Gagal memuat file data utama (`{path}`).\n\n"
+            f"{diagnosis}\n\n"
+            "**Penyebab paling umum**: file `.gz` ini seharusnya biner, tapi git/GitHub sempat "
+            "mengubah isinya saat di-upload/commit (mis. konversi CRLF/LF karena `autocrlf`, "
+            "atau file dibuka & disimpan ulang lewat editor teks/form upload web).\n\n"
+            "**Cara memperbaiki:**\n"
+            "1. Tambahkan file `.gitattributes` di root repo berisi baris: `*.gz binary` -- ini "
+            "memaksa git memperlakukan semua file `.gz` sebagai biner (tidak pernah diubah "
+            "isinya) untuk commit-commit berikutnya.\n"
+            "2. Upload ulang file `data/pagu_realisasi.csv.gz` yang ASLI (jangan dibuka/disimpan "
+            "ulang di editor apa pun) lewat `git add` + `git commit` + `git push` dari command "
+            "line/GitHub Desktop.\n"
+            "3. Sebelum push, cek validitasnya di terminal: `gunzip -t data/pagu_realisasi.csv.gz` "
+            "-- kalau tidak ada output/error berarti filenya aman.\n\n"
+            f"Detail teknis: {type(e).__name__}: {e}"
+        )
+        st.stop()
 
 
 @st.cache_data(show_spinner="Memuat data dari Supabase...")
