@@ -79,6 +79,50 @@ KONFIGURASI_KEBIJAKAN = [
 ]
 
 
+# --------------------------------------------------------------------------
+# 1b. Konfigurasi ANOMALI SATU KALI (one-off, tidak berulang)
+# --------------------------------------------------------------------------
+# Berbeda dengan KONFIGURASI_KEBIJAKAN (menyesuaikan bulan-bulan MASA DEPAN yang masih
+# diproyeksikan), tabel ini menandai bulan-bulan yang SUDAH TERJADI di tahun berjalan sebagai
+# "anomali tidak berulang" -- misalnya rapel/pembayaran susulan yang terjadi sekali karena
+# keterlambatan administratif, bukan pola yang akan berulang tiap tahun. Bulan yang ditandai
+# di sini TETAP ditampilkan apa adanya di angka aktual/realisasi (uangnya memang sudah keluar),
+# tapi DIKECUALIKAN saat menghitung "kecepatan belanja rata-rata" (dipakai utk override
+# target tahunan & deteksi lonjakan tidak wajar) -- supaya satu bulan yang njomplang tidak
+# membuat proyeksi bulan-bulan normal berikutnya ikut meroket.
+#
+# Field: nama, kddept (None = semua), jenis_belanja (None = semua), tahun, bulan (1-12).
+PENYESUAIAN_SATU_KALI = [
+    {
+        "nama": (
+            "Rapel gaji Okt-Des 2025 yang terlambat, dibayarkan April 2026 "
+            "(satker lingkup BA Mahkamah Agung)"
+        ),
+        "kddept": 5,  # Mahkamah Agung
+        "jenis_belanja": 51,
+        "tahun": 2026,
+        "bulan": 4,
+    },
+]
+
+
+def _masker_anomali_satu_kali(kddept_arr: np.ndarray, jenis_arr: np.ndarray, tahun_y: int) -> np.ndarray:
+    """Bangun matriks boolean (n_baris x 12) yang menandai bulan mana per baris yang harus
+    dikecualikan dari perhitungan kecepatan belanja (bukan dari angka aktual itu sendiri)."""
+    n = len(kddept_arr)
+    mask = np.zeros((n, 12), dtype=bool)
+    for aturan in PENYESUAIAN_SATU_KALI:
+        if aturan["tahun"] != tahun_y:
+            continue
+        cocok = np.ones(n, dtype=bool)
+        if aturan.get("kddept") is not None:
+            cocok &= (kddept_arr == aturan["kddept"])
+        if aturan.get("jenis_belanja") is not None:
+            cocok &= (jenis_arr == aturan["jenis_belanja"])
+        mask[cocok, aturan["bulan"] - 1] = True
+    return mask
+
+
 def _cocokkan_kebijakan(kddept: int, akun: str, tahun_y: int) -> list:
     """Cari semua aturan kebijakan yang cocok untuk kddept+akun+tahun tertentu."""
     akun_lower = str(akun).lower()
@@ -159,11 +203,24 @@ def _bangun_profil_historis(df_hist: pd.DataFrame, tahun_y: int, group_cols: lis
     g["REALISASI"] = g[BULAN_KOLOM].sum(axis=1)
     g["BOBOT"] = (tahun_y - g["TAHUN"]).map(BOBOT_TAHUN)
 
-    rate_valid = g["PAGU"] > 0
+    # Ambang minimal pagu supaya valid dipakai menghitung RATE (realisasi/pagu). Di data
+    # riil kadang muncul pagu berupa angka simbolis/placeholder (mis. Rp 1.000) utk akun yang
+    # sebenarnya belum benar2 dianggarkan tahun itu -- kalau tetap dipakai, rate bisa meledak
+    # jadi ribuan persen (realisasi jutaan / pagu seribu) dan merusak rerata tertimbang, apalagi
+    # utk Belanja Pegawai yang forecast-nya TIDAK dibatasi pagu (lihat hitung_forecast_satker_akun).
+    AMBANG_PAGU_MINIMAL = 1_000_000  # Rp 1 juta
+    # Rate tahunan juga dibatasi atas (safety net data quality, BUKAN keputusan kebijakan) --
+    # realisasi > 300% dari pagu di satu tahun nyaris pasti anomali data, bukan pola wajar yang
+    # ingin direplikasi ke tahun proyeksi.
+    BATAS_ATAS_RATE_TAHUNAN = 3.0
+
+    rate_valid = g["PAGU"] >= AMBANG_PAGU_MINIMAL
     g["RATE"] = np.where(rate_valid, g["REALISASI"] / g["PAGU"].replace(0, np.nan), np.nan)
+    g["RATE"] = g["RATE"].clip(upper=BATAS_ATAS_RATE_TAHUNAN)
     g["W_RATE_NUM"] = np.where(rate_valid, g["BOBOT"] * g["RATE"], 0.0)
     g["W_RATE_DEN"] = np.where(rate_valid, g["BOBOT"], 0.0)
     g["W_RUP_NUM"] = g["BOBOT"] * g["REALISASI"]
+    g["W_PAGU_NUM"] = g["BOBOT"] * g["PAGU"]
 
     prop_valid = g["REALISASI"] > 0
     real_aman = g["REALISASI"].replace(0, np.nan)
@@ -172,7 +229,7 @@ def _bangun_profil_historis(df_hist: pd.DataFrame, tahun_y: int, group_cols: lis
     g["WPROP_DEN"] = np.where(prop_valid, g["BOBOT"], 0.0)
 
     kolom_jumlah = (
-        ["W_RATE_NUM", "W_RATE_DEN", "W_RUP_NUM", "BOBOT", "WPROP_DEN"]
+        ["W_RATE_NUM", "W_RATE_DEN", "W_RUP_NUM", "W_PAGU_NUM", "BOBOT", "WPROP_DEN"]
         + [f"WPROP_{c}" for c in BULAN_KOLOM]
     )
     agg = g.groupby(group_cols, as_index=False)[kolom_jumlah].sum()
@@ -184,6 +241,13 @@ def _bangun_profil_historis(df_hist: pd.DataFrame, tahun_y: int, group_cols: lis
     )
     agg["RUPIAH_TERTIMBANG"] = np.where(
         agg["BOBOT"] > 0, agg["W_RUP_NUM"] / agg["BOBOT"], np.nan
+    )
+    # Rerata pagu tertimbang -- dipakai sbg penjaga skala utk Belanja Pegawai: kalau pagu
+    # tahun berjalan jauh lebih kecil drpd rerata historis (indikasi reklasifikasi akun,
+    # mis. komponen tunjangan dipindah ke akun lain), target rupiah pegawai perlu ikut
+    # diskalakan turun -- lihat pemakaiannya di hitung_forecast_satker_akun.
+    agg["PAGU_TERTIMBANG"] = np.where(
+        agg["BOBOT"] > 0, agg["W_PAGU_NUM"] / agg["BOBOT"], np.nan
     )
     for c in BULAN_KOLOM:
         agg[f"PROFIL_{c}"] = np.where(
@@ -205,7 +269,11 @@ def _bangun_profil_historis(df_hist: pd.DataFrame, tahun_y: int, group_cols: lis
     cv = (np.sqrt(var_w) / mean_w.replace(0, np.nan)).clip(lower=0)
     agg = agg.merge(cv.rename("CV_RATE").reset_index(), on=group_cols, how="left")
 
-    keep = group_cols + ["RATE_TERTIMBANG", "RUPIAH_TERTIMBANG", "N_TAHUN", "CV_RATE"] + profil_cols
+    keep = (
+        group_cols
+        + ["RATE_TERTIMBANG", "RUPIAH_TERTIMBANG", "PAGU_TERTIMBANG", "N_TAHUN", "CV_RATE"]
+        + profil_cols
+    )
     return agg[keep]
 
 
@@ -303,7 +371,9 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
     profil_global_jenis = _bangun_profil_historis(df_hist, tahun_y, ["JENIS BELANJA"])
 
     profil_cols = [f"PROFIL_{c}" for c in BULAN_KOLOM]
-    hasil_cols = ["RATE_TERTIMBANG", "RUPIAH_TERTIMBANG", "N_TAHUN", "CV_RATE"] + profil_cols
+    hasil_cols = (
+        ["RATE_TERTIMBANG", "RUPIAH_TERTIMBANG", "PAGU_TERTIMBANG", "N_TAHUN", "CV_RATE"] + profil_cols
+    )
 
     gabung = now.merge(profil_sendiri, on=["KDSATKER", "AKUN"], how="left")
     ada_sendiri = gabung["N_TAHUN"].fillna(0) > 0
@@ -331,23 +401,73 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
 
     # --- Hitung target tahunan & forecast bulanan (vektor, per baris) ---
     is_pegawai = gabung["JENIS BELANJA"] == 51
-    target_tahunan = np.where(
-        is_pegawai,
-        gabung["RUPIAH_TERTIMBANG"],
-        gabung["RATE_TERTIMBANG"] * gabung["PAGU"],
-    )
+
+    # Target tahunan Belanja Pegawai: SAMA formulanya dgn jenis belanja lain (rate realisasi
+    # tertimbang x pagu tahun berjalan), BUKAN rerata rupiah absolut. Ini penting supaya target
+    # otomatis ikut menyesuaikan saat pagu berubah signifikan dari tahun ke tahun -- baik naik
+    # drastis (mis. penambahan formasi/kenaikan tunjangan besar yg sudah dianggarkan) maupun
+    # turun drastis (mis. akun direklasifikasi, realisasinya dipindah ke akun lain). Realisasi
+    # gaji PNS/PPPK biasanya sangat stabil thd pagu (~99% terserap tiap tahun), jadi rate
+    # tertimbang adalah prediktor yang jauh lebih andal drpd rupiah absolut yg "buta" thd
+    # perubahan skala pagu. Pegawai TETAP boleh melebihi pagu (rate historis kadang > 100%,
+    # dan lihat juga override target_tersirat di bawah) -- yg beda dari kategori lain hanyalah
+    # TIDAK dibatasi maksimal pagu saat proyeksi (lihat langkah "cap" di bawah).
+    target_tahunan = gabung["RATE_TERTIMBANG"] * gabung["PAGU"]
     aktual_mat = gabung[[f"AKT_{c}" for c in BULAN_KOLOM]].to_numpy(dtype=float)
     profil_mat = gabung[profil_cols].to_numpy(dtype=float)
+    kddept_arr = gabung["KDDEPT"].to_numpy()
+    jenis_arr = gabung["JENIS BELANJA"].to_numpy()
 
-    # Fallback run-rate murni (dipakai kalau bahkan level 4 tidak menghasilkan angka valid,
-    # mis. akun benar2 baru yang belum pernah ada di histori jenis belanja tsb sama sekali)
     aktual_sd_sekarang = aktual_mat[:, :bulan_penuh_terakhir].sum(axis=1) if bulan_penuh_terakhir else np.zeros(len(gabung))
+
+    # --- Override target tahunan kalau kecepatan belanja riil tahun berjalan sudah melampaui
+    # pola historis (mis. ada kenaikan pagu/kebijakan riil yang belum tertangkap di rerata 5
+    # tahun). PENTING: override ini TIDAK memakai rerata rata (aktual/bulan berjalan x12) --
+    # itu naif dan gagal memperhitungkan bulan-bulan yang secara historis memang selalu njomplang
+    # (THR bulan Maret, gaji ke-13 bulan Juni, dst). Sebagai gantinya, dipakai "target tersirat"
+    # = aktual sejauh ini dibagi PROPORSI KUMULATIF HISTORIS pada rentang bulan yang sama --
+    # jadi kalau bulan berjalan memang secara historis berat di depan (mis. krn THR), pembagi
+    # ikut besar dan tidak salah dikira sebagai kecepatan belanja tahunan yang tinggi.
+    #
+    # Bulan yang ditandai PENYESUAIAN_SATU_KALI (anomali tidak berulang, mis. rapel gaji
+    # keterlambatan) DIKECUALIKAN dari perhitungan target tersirat ini (baik dari aktual
+    # pembilang maupun dari proporsi historis penyebut) supaya satu bulan anomali tidak
+    # menyeret proyeksi bulan-bulan normal lainnya ikut naik -- tapi uangnya sendiri tetap
+    # dihitung penuh saat menentukan SISA target yang harus didistribusikan (lihat di bawah).
+    mask_anomali = _masker_anomali_satu_kali(kddept_arr, jenis_arr, tahun_y)
+    if bulan_penuh_terakhir > 0:
+        mask_anomali_sd_sekarang = mask_anomali[:, :bulan_penuh_terakhir]
+        aktual_bersih_sd_sekarang = np.where(
+            mask_anomali_sd_sekarang, 0.0, aktual_mat[:, :bulan_penuh_terakhir]
+        ).sum(axis=1)
+        profil_sd_sekarang = np.nan_to_num(profil_mat[:, :bulan_penuh_terakhir], nan=0.0)
+        kum_profil_bersih = np.where(mask_anomali_sd_sekarang, 0.0, profil_sd_sekarang).sum(axis=1)
+        # Hanya dipakai kalau proporsi historis yg tersisa cukup besar (>=15% dari setahun) --
+        # di bawah itu pembagian terlalu sensitif/tidak stabil utk dijadikan dasar ekstrapolasi.
+        cukup_data = kum_profil_bersih >= 0.15
+        target_tersirat = np.where(
+            cukup_data, np.divide(aktual_bersih_sd_sekarang, kum_profil_bersih, out=np.zeros(len(gabung)), where=cukup_data),
+            np.nan,
+        )
+    else:
+        target_tersirat = np.full(len(gabung), np.nan)
+
+    # Fallback run-rate sederhana -- HANYA dipakai kalau bahkan target historis (RATE/RUPIAH
+    # tertimbang) tidak tersedia sama sekali (NaN, mis. akun benar2 baru tanpa histori apa pun
+    # di level manapun) DAN target tersirat di atas juga tidak bisa dihitung.
     rerata_berjalan = np.where(bulan_penuh_terakhir > 0, aktual_sd_sekarang / max(bulan_penuh_terakhir, 1), 0.0)
-    target_runrate = rerata_berjalan * 12
-    target_tahunan = np.where(np.isnan(target_tahunan), target_runrate, target_tahunan)
-    # Target historis tidak boleh lebih kecil dari realisasi yang SUDAH terjadi (sama seperti
-    # logika lama) -- kalau realisasi berjalan sudah melampaui pola historis, pakai run-rate.
-    target_tahunan = np.maximum(target_tahunan, np.where(target_runrate > target_tahunan, target_runrate, target_tahunan))
+    target_runrate_polos = rerata_berjalan * 12
+    target_tahunan = np.where(
+        np.isnan(target_tahunan),
+        np.where(~np.isnan(target_tersirat), target_tersirat, target_runrate_polos),
+        target_tahunan,
+    )
+    # Target historis tidak boleh lebih kecil dari target tersirat riil tahun berjalan --
+    # kalau kecepatan belanja aktual (setelah dibersihkan dari anomali & bulan njomplang
+    # historis) memang sudah melampaui pola historis, pakai yang lebih besar.
+    target_tahunan = np.where(
+        ~np.isnan(target_tersirat) & (target_tersirat > target_tahunan), target_tersirat, target_tahunan
+    )
 
     hasil_mat = aktual_mat.copy()
     keterangan_list = [""] * len(gabung)
@@ -400,12 +520,28 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
 
     gabung["CONFIDENCE"] = _skor_confidence(gabung["CV_RATE"], gabung["N_TAHUN"], gabung["SUMBER_PROFIL"])
     gabung["KETERANGAN_KEBIJAKAN"] = keterangan_list
+
+    # Keterangan anomali satu-kali yg berlaku utk baris ini (transparansi -- bulan mana yg
+    # dikecualikan dari perhitungan kecepatan belanja saat menentukan target tahunan).
+    keterangan_anomali = [""] * len(gabung)
+    if mask_anomali.any():
+        for aturan in PENYESUAIAN_SATU_KALI:
+            if aturan["tahun"] != tahun_y:
+                continue
+            cocok = np.ones(len(gabung), dtype=bool)
+            if aturan.get("kddept") is not None:
+                cocok &= (kddept_arr == aturan["kddept"])
+            if aturan.get("jenis_belanja") is not None:
+                cocok &= (jenis_arr == aturan["jenis_belanja"])
+            for i in np.where(cocok)[0]:
+                keterangan_anomali[i] = aturan["nama"]
+    gabung["KETERANGAN_ANOMALI"] = keterangan_anomali
     gabung["BULAN_PENUH_TERAKHIR"] = bulan_penuh_terakhir
 
     kolom_akhir = (
         ["KDDEPT", "NMDEPT", "KDSATKER", "NMSATKER", "JENIS BELANJA", "LABEL_JENIS_BELANJA",
          "AKUN", "PAGU", "SUMBER_PROFIL", "CONFIDENCE", "N_TAHUN", "KETERANGAN_KEBIJAKAN",
-         "BULAN_PENUH_TERAKHIR"]
+         "KETERANGAN_ANOMALI", "BULAN_PENUH_TERAKHIR"]
         + [f"AKT_{c}" for c in BULAN_KOLOM]
         + [f"HASIL_{c}" for c in BULAN_KOLOM]
     )
@@ -567,13 +703,22 @@ def deteksi_early_warning(
                     poin_risiko += 10
 
         # --- 3. Lonjakan tidak wajar di bulan terakhir ---
+        # Dilewati kalau bulan ini sudah ditandai sebagai anomali satu-kali yang diketahui
+        # sebabnya (lihat PENYESUAIAN_SATU_KALI) -- supaya event yang sudah dijelaskan (mis.
+        # rapel keterlambatan gaji) tidak dilaporkan ulang seolah-olah anomali misterius.
+        kddept_di_scope = set(d["KDDEPT"].unique())
+        anomali_bulan_ini = any(
+            a["tahun"] == tahun_y and a["bulan"] == bulan_penuh_terakhir
+            and (a.get("kddept") is None or a["kddept"] in kddept_di_scope)
+            for a in PENYESUAIAN_SATU_KALI
+        )
         bulan_kolom_terakhir = BULAN_KOLOM[bulan_penuh_terakhir - 1]
         nilai_bulan_ini = d[f"AKT_{bulan_kolom_terakhir}"].sum()
         hist_bulan_ini = (
             d_hist_scope.groupby("TAHUN")[bulan_kolom_terakhir].sum()
             if not d_hist_scope.empty else pd.Series(dtype=float)
         )
-        if len(hist_bulan_ini) >= 2:
+        if len(hist_bulan_ini) >= 2 and not anomali_bulan_ini:
             mean_h, std_h = hist_bulan_ini.mean(), hist_bulan_ini.std()
             if std_h and std_h > 0 and nilai_bulan_ini > mean_h + 2 * std_h:
                 peringatan.append({
