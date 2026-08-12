@@ -1,0 +1,12 @@
+# Paksa git memperlakukan file-file ini sebagai BINER -- jangan pernah dikonversi (mis.
+# line-ending CRLF/LF) saat commit/checkout. Tanpa ini, git/GitHub bisa diam-diam merusak
+# isi file (menyebabkan pandas.errors.ParserError saat .gz dimuat, atau Excel minta
+# "repair file"/kolom berantakan saat .xlsx dibuka), tergantung setting autocrlf di
+# komputer/GitHub Actions.
+*.gz binary
+*.gz -text -diff
+
+*.xlsx binary
+*.xlsx -text -diff
+*.xls binary
+*.xls -text -diff
