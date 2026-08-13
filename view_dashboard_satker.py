@@ -496,41 +496,6 @@ st.divider()
 
 
 # --------------------------------------------------------------------------
-# Waterfall: Pagu -> Realisasi -> Proyeksi Tambahan -> Sisa
-# --------------------------------------------------------------------------
-
-st.subheader("Waterfall Pagu — Realisasi — Proyeksi")
-
-proyeksi_tambahan = max(proyeksi_akhir_tahun - realisasi_total, 0)
-sisa_setelah_proyeksi = pagu_total - proyeksi_akhir_tahun
-
-fig_waterfall = go.Figure(go.Waterfall(
-    orientation="v",
-    measure=["absolute", "relative", "relative", "total"],
-    x=["Pagu", "Realisasi (aktual)", "Proyeksi Tambahan", "Sisa Setelah Proyeksi"],
-    y=[pagu_total, -realisasi_total, -proyeksi_tambahan, sisa_setelah_proyeksi],
-    text=[
-        f"Rp {pagu_total:,.0f}", f"-Rp {realisasi_total:,.0f}",
-        f"-Rp {proyeksi_tambahan:,.0f}", f"Rp {sisa_setelah_proyeksi:,.0f}",
-    ],
-    textposition="outside",
-    connector={"line": {"color": "rgba(120,120,120,0.4)"}},
-    decreasing={"marker": {"color": "#2E86C1"}},
-    totals={"marker": {"color": "#28a745" if sisa_setelah_proyeksi >= 0 else "#dc3545"}},
-))
-fig_waterfall.update_layout(yaxis_title="Rupiah", showlegend=False)
-st.plotly_chart(fig_waterfall, use_container_width=True)
-st.caption(
-    "Menunjukkan bagaimana pagu \"terpakai\": dikurangi realisasi yang sudah benar-benar "
-    "terjadi, lalu dikurangi lagi estimasi proyeksi bulan-bulan yang belum berakhir, "
-    "menyisakan sisa pagu setelah proyeksi (bisa negatif kalau proyeksi diperkirakan "
-    "melebihi pagu, khususnya utk Belanja Pegawai yang memang tidak dibatasi maksimal pagu)."
-)
-
-st.divider()
-
-
-# --------------------------------------------------------------------------
 # Early Warning System
 # --------------------------------------------------------------------------
 
