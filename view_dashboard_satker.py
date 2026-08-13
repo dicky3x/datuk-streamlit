@@ -13,6 +13,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from datetime import date
 
 from common import (
     BULAN_KOLOM, BULAN_LABEL, fmt_satker, fmt_dept,
@@ -146,6 +147,32 @@ bulan_penuh_terakhir = (
     int(df_forecast["BULAN_PENUH_TERAKHIR"].iloc[0]) if not df_forecast.empty else bulan_penuh_terakhir
 )
 
+# --------------------------------------------------------------------------
+# Ambang batas KHUSUS UNTUK TAMPILAN (beda dari bulan_penuh_terakhir di atas!).
+#
+# bulan_penuh_terakhir (data-driven, dari forecasting.py) dipakai utk PERHITUNGAN angka --
+# menentukan bulan mana yang datanya dianggap cukup lengkap utk dipakai apa adanya sbg aktual
+# saat meredistribusi sisa target proyeksi. Itu benar & sengaja tidak memakai patokan kalender,
+# krn realisasi (terutama gaji pokok & tunjangan kinerja) sering sudah tercatat penuh di awal
+# bulan berjalan.
+#
+# TAPI itu tidak berarti bulan tsb sudah "final" sepenuhnya -- komponen lain yang lebih kecil
+# (mis. uang makan & uang lembur yang biasa dibayarkan sekitar tanggal 10-15, atau kekurangan
+# gaji induk pegawai pindahan) masih mungkin nambah sepanjang bulan kalender itu. Karena itu utk
+# TAMPILAN (warna kuning di tabel, garis putus-putus di grafik) tetap dipakai bulan kalender yang
+# sedang berjalan sbg batas bawah tambahan -- bulan berjalan SELALU ditandai "belum final" secara
+# visual, brp pun kelengkapan datanya, sementara angkanya sendiri tetap yang paling akurat
+# (data aktual kalau sudah ada, bukan forecast buta).
+_hari_ini = date.today()
+if tahun < _hari_ini.year:
+    _bulan_kalender_berjalan = 13  # tahun sudah lewat -> tidak ada bulan yang masih "berjalan"
+elif tahun > _hari_ini.year:
+    _bulan_kalender_berjalan = 1
+else:
+    _bulan_kalender_berjalan = _hari_ini.month
+bulan_penuh_terakhir_tampilan = min(bulan_penuh_terakhir + 1, _bulan_kalender_berjalan) - 1
+bulan_penuh_terakhir_tampilan = max(bulan_penuh_terakhir_tampilan, 0)
+
 agg_kategori = forecasting.agregasi_per_kategori(df_forecast, FILTER_ENTITAS)
 agg_aktual = forecasting.agregasi_aktual_per_kategori(df_forecast, FILTER_ENTITAS)
 
@@ -258,15 +285,15 @@ def _nilai_proyeksi_bulan(b):
     return total_bulanan_hasil[BULAN_KOLOM[b - 1]]
 
 
-aktual = [monthly.values[b - 1] if b <= bulan_penuh_terakhir else None for b in bulan_angka]
+aktual = [monthly.values[b - 1] if b <= bulan_penuh_terakhir_tampilan else None for b in bulan_angka]
 proyeksi = []
 for b in bulan_angka:
-    if bulan_penuh_terakhir == 0:
+    if bulan_penuh_terakhir_tampilan == 0:
         # Belum ada satu bulan pun yang penuh datanya tahun ini -> seluruh garis adalah proyeksi
         proyeksi.append(_nilai_proyeksi_bulan(b))
-    elif b < bulan_penuh_terakhir:
+    elif b < bulan_penuh_terakhir_tampilan:
         proyeksi.append(None)
-    elif b == bulan_penuh_terakhir:
+    elif b == bulan_penuh_terakhir_tampilan:
         proyeksi.append(monthly.values[b - 1])  # titik sambung dengan garis aktual
     else:
         proyeksi.append(_nilai_proyeksi_bulan(b))
@@ -286,13 +313,13 @@ fig_trend.update_layout(yaxis_title="Rupiah (per bulan)", xaxis_title=None)
 st.plotly_chart(fig_trend, use_container_width=True)
 
 _catatan_bulan_berjalan = ""
-if bulan_terakhir > bulan_penuh_terakhir:
+if bulan_terakhir > bulan_penuh_terakhir_tampilan:
     _catatan_bulan_berjalan = (
         f" Bulan {BULAN_LABEL.get(bulan_terakhir, '-')} sendiri masih berjalan (belum berakhir), "
         "jadi titik & garisnya di grafik ini memakai proyeksi akhir bulan, bukan realisasi yang "
         "baru tercatat sebagian sejauh ini."
     )
-_label_batas = BULAN_LABEL.get(bulan_penuh_terakhir, "-") if bulan_penuh_terakhir else None
+_label_batas = BULAN_LABEL.get(bulan_penuh_terakhir_tampilan, "-") if bulan_penuh_terakhir_tampilan else None
 _batas_teks = f"Bulan setelah {_label_batas}" if _label_batas else "Seluruh bulan tahun ini"
 
 if metode_proyeksi == "historis":
@@ -427,10 +454,10 @@ BARIS_PERSEN = [BARIS_TOTAL_REALISASI_PCT, BARIS_TOTAL_PROYEKSI_PCT]
 
 # Baris bulan yang proyeksi (belum berakhir) ditandai kuning; begitu juga baris ringkasan
 # "Total Realisasi + Proyeksi" karena mengandung angka proyeksi (kalau memang ada proyeksinya).
-baris_bulan_proyeksi = [b for i, b in enumerate(BULAN_KOLOM) if i >= bulan_penuh_terakhir]
+baris_bulan_proyeksi = [b for i, b in enumerate(BULAN_KOLOM) if i >= bulan_penuh_terakhir_tampilan]
 mask_final = pd.DataFrame(False, index=tabel_final.index, columns=tabel_final.columns)
 mask_final.loc[baris_bulan_proyeksi, :] = True
-if bulan_penuh_terakhir < 12:
+if bulan_penuh_terakhir_tampilan < 12:
     mask_final.loc[BARIS_TOTAL_PROYEKSI_RP, :] = True
     mask_final.loc[BARIS_TOTAL_PROYEKSI_PCT, :] = True
 
@@ -453,7 +480,12 @@ styled_tabel = (
 )
 st.dataframe(styled_tabel, use_container_width=True)
 st.caption(
-    "🟨 Sel berwarna kuning = mengandung angka proyeksi hybrid (bulan yang belum berakhir): "
+    "🟨 Sel berwarna kuning = bulan yang belum benar-benar berakhir (termasuk bulan kalender "
+    "yang sedang berjalan, meskipun sebagian besar datanya -- mis. gaji pokok & tunjangan "
+    "kinerja -- biasanya sudah tercatat penuh di awal bulan; komponen lebih kecil spt uang "
+    "makan/lembur sekitar tanggal 10-15 atau kekurangan gaji induk pegawai pindahan masih "
+    "mungkin menambah angkanya) atau bulan yang datanya memang belum cukup lengkap. Angkanya "
+    "sendiri sudah memakai data aktual sejauh tersedia, ditambah proyeksi hybrid utk sisanya: "
     "profil bulanan tertimbang 5-tahun per kombinasi satker-akun, didistribusikan ulang tiap "
     "ada realisasi bulan baru (rolling forecast) -- lihat penjelasan lengkap di atas grafik "
     f"tren. Khusus **{LABEL_BELANJA_PEGAWAI}**, proyeksi TIDAK dibatasi maksimal pagu tahun "

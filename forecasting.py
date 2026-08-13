@@ -194,7 +194,20 @@ def _bangun_profil_historis(df_hist: pd.DataFrame, tahun_y: int, group_cols: lis
       N_TAHUN                -- jumlah tahun histori yang benar-benar dipakai (0-5)
     """
     if df_hist.empty:
-        return pd.DataFrame()
+        # Tetap kembalikan DataFrame dgn struktur kolom & TIPE DATA yang benar (kosong 0 baris),
+        # supaya kode pemanggil (yang mem-merge hasil ini dgn "on=group_cols") tidak KeyError
+        # krn kolom kunci merge tidak ada, dan operasi numerik sesudahnya (np.isnan dkk) tidak
+        # error krn kolom bertipe object alih2 float. Kasus nyata: tahun_y=2021 (tahun paling
+        # awal di data) -> df_hist (tahun_y-5..tahun_y-1) otomatis kosong krn tidak ada data
+        # sebelum 2021 sama sekali.
+        kolom_numerik = (
+            ["RATE_TERTIMBANG", "RUPIAH_TERTIMBANG", "PAGU_TERTIMBANG", "N_TAHUN", "CV_RATE"]
+            + [f"PROFIL_{c}" for c in BULAN_KOLOM]
+        )
+        kosong = pd.DataFrame({c: pd.Series(dtype="float64") for c in kolom_numerik})
+        for c in group_cols:
+            kosong.insert(0, c, pd.Series(dtype="object"))
+        return kosong[group_cols + kolom_numerik]
 
     g = (
         df_hist.groupby(group_cols + ["TAHUN"], as_index=False)[["PAGU"] + BULAN_KOLOM]

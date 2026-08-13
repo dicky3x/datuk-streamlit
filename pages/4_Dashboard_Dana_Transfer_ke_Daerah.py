@@ -183,7 +183,8 @@ with p2:
 
 
 # --------------------------------------------------------------------------
-# Perbandingan antar kabupaten/kota (hanya relevan kalau "Semua" yang dipilih)
+# Perbandingan antar kabupaten/kota (hanya relevan kalau "Semua" yang dipilih) --
+# ATAU rincian per jenis belanja TKD (kalau satu kabupaten/kota spesifik dipilih)
 # --------------------------------------------------------------------------
 
 if kabkota is None:
@@ -208,6 +209,42 @@ if kabkota is None:
     st.dataframe(
         per_kabkota.style.format({
             "Pagu": "Rp {:,.0f}", "Realisasi": "Rp {:,.0f}", "Persen Realisasi": "{:.1f}%",
+        }),
+        use_container_width=True,
+        hide_index=True,
+    )
+else:
+    st.subheader(f"Rincian per Jenis Belanja — {kabkota}")
+    per_jenis = (
+        df_wilayah.groupby("LABEL_JENIS_BELANJA")
+        .agg(Pagu=("PAGU", "sum"), Realisasi=("REALISASI", "sum"), **{"Sisa Pagu": ("SISA PAGU", "sum")})
+        .reset_index()
+        .rename(columns={"LABEL_JENIS_BELANJA": "Jenis Belanja"})
+        .sort_values("Pagu", ascending=False)
+    )
+    per_jenis["% Realisasi"] = (
+        per_jenis["Realisasi"] / per_jenis["Pagu"].replace(0, np.nan) * 100
+    ).fillna(0)
+
+    baris_total = pd.DataFrame([{
+        "Jenis Belanja": "TOTAL",
+        "Pagu": per_jenis["Pagu"].sum(),
+        "Realisasi": per_jenis["Realisasi"].sum(),
+        "Sisa Pagu": per_jenis["Sisa Pagu"].sum(),
+        "% Realisasi": (per_jenis["Realisasi"].sum() / per_jenis["Pagu"].sum() * 100) if per_jenis["Pagu"].sum() else 0,
+    }])
+    per_jenis_tampil = pd.concat([per_jenis, baris_total], ignore_index=True)
+    per_jenis_tampil = per_jenis_tampil[["Jenis Belanja", "Pagu", "Realisasi", "% Realisasi", "Sisa Pagu"]]
+
+    def _tebalkan_total(row):
+        return ["font-weight: bold;" if row["Jenis Belanja"] == "TOTAL" else "" for _ in row]
+
+    st.dataframe(
+        per_jenis_tampil.style
+        .apply(_tebalkan_total, axis=1)
+        .format({
+            "Pagu": "Rp {:,.0f}", "Realisasi": "Rp {:,.0f}",
+            "% Realisasi": "{:.1f}%", "Sisa Pagu": "Rp {:,.0f}",
         }),
         use_container_width=True,
         hide_index=True,
