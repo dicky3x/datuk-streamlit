@@ -38,6 +38,8 @@ per baris, supaya tetap cepat walau datanya ratusan ribu baris.
 
 from __future__ import annotations
 
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -374,6 +376,28 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
 
     _, bulan_penuh_terakhir = tentukan_bulan_penuh_terakhir_global(df_all, tahun_y)
 
+    # bulan_penuh_terakhir di atas murni data-driven (lihat catatan di
+    # tentukan_bulan_penuh_terakhir_global) -- suatu bulan bisa dianggap "penuh" hanya krn
+    # komponen besar spt gaji pokok sudah tercatat penuh di awal bulan, PADAHAL bulan kalender
+    # itu SENDIRI belum berakhir & komponen lain yang lebih kecil (uang makan, lembur, dst)
+    # masih mungkin nambah. Kalau bulan_penuh_terakhir dipakai apa adanya sbg batas
+    # aktual-vs-forecast di bawah, bulan kalender yang sedang berjalan akan ditampilkan sbg
+    # HASIL = aktual murni (parsial, blm mencakup sisa bulan) -- padahal secara visual (lihat
+    # bulan_penuh_terakhir_tampilan di view_dashboard_satker.py) bulan itu tetap ditandai
+    # "belum final". bulan_forecast_mulai menyamakan patokan itu: bulan kalender yang sedang
+    # berjalan SELALU ikut diproyeksikan (dgn jaring pengaman "tidak boleh lebih kecil dari
+    # aktual sejauh ini" di bawah), sehingga isi tabel proyeksi & indikator visual (warna
+    # kuning) konsisten -- bulan berjalan selalu menampilkan proyeksi sd akhir bulan, bukan
+    # cuma realisasi sejauh ini.
+    _hari_ini = date.today()
+    if tahun_y == _hari_ini.year:
+        bulan_forecast_mulai = min(bulan_penuh_terakhir, _hari_ini.month - 1)
+    elif tahun_y > _hari_ini.year:
+        bulan_forecast_mulai = 0
+    else:
+        bulan_forecast_mulai = bulan_penuh_terakhir
+    bulan_forecast_mulai = max(bulan_forecast_mulai, 0)
+
     df_hist = df_all[(df_all["TAHUN"] >= tahun_y - 5) & (df_all["TAHUN"] < tahun_y)]
 
     # --- Level 1: profil sendiri per (satker, akun) ---
@@ -447,7 +471,7 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
     kddept_arr = gabung["KDDEPT"].to_numpy()
     jenis_arr = gabung["JENIS BELANJA"].to_numpy()
 
-    aktual_sd_sekarang = aktual_mat[:, :bulan_penuh_terakhir].sum(axis=1) if bulan_penuh_terakhir else np.zeros(len(gabung))
+    aktual_sd_sekarang = aktual_mat[:, :bulan_forecast_mulai].sum(axis=1) if bulan_forecast_mulai else np.zeros(len(gabung))
 
     # --- Override target tahunan kalau kecepatan belanja riil tahun berjalan sudah melampaui
     # pola historis (mis. ada kenaikan pagu/kebijakan riil yang belum tertangkap di rerata 5
@@ -464,12 +488,12 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
     # menyeret proyeksi bulan-bulan normal lainnya ikut naik -- tapi uangnya sendiri tetap
     # dihitung penuh saat menentukan SISA target yang harus didistribusikan (lihat di bawah).
     mask_anomali = _masker_anomali_satu_kali(kddept_arr, jenis_arr, tahun_y)
-    if bulan_penuh_terakhir > 0:
-        mask_anomali_sd_sekarang = mask_anomali[:, :bulan_penuh_terakhir]
+    if bulan_forecast_mulai > 0:
+        mask_anomali_sd_sekarang = mask_anomali[:, :bulan_forecast_mulai]
         aktual_bersih_sd_sekarang = np.where(
-            mask_anomali_sd_sekarang, 0.0, aktual_mat[:, :bulan_penuh_terakhir]
+            mask_anomali_sd_sekarang, 0.0, aktual_mat[:, :bulan_forecast_mulai]
         ).sum(axis=1)
-        profil_sd_sekarang = np.nan_to_num(profil_mat[:, :bulan_penuh_terakhir], nan=0.0)
+        profil_sd_sekarang = np.nan_to_num(profil_mat[:, :bulan_forecast_mulai], nan=0.0)
         kum_profil_bersih = np.where(mask_anomali_sd_sekarang, 0.0, profil_sd_sekarang).sum(axis=1)
         # Hanya dipakai kalau proporsi historis yg tersisa cukup besar (>=15% dari setahun) --
         # di bawah itu pembagian terlalu sensitif/tidak stabil utk dijadikan dasar ekstrapolasi.
@@ -484,7 +508,7 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
     # Fallback run-rate sederhana -- HANYA dipakai kalau bahkan target historis (RATE/RUPIAH
     # tertimbang) tidak tersedia sama sekali (NaN, mis. akun benar2 baru tanpa histori apa pun
     # di level manapun) DAN target tersirat di atas juga tidak bisa dihitung.
-    rerata_berjalan = np.where(bulan_penuh_terakhir > 0, aktual_sd_sekarang / max(bulan_penuh_terakhir, 1), 0.0)
+    rerata_berjalan = np.where(bulan_forecast_mulai > 0, aktual_sd_sekarang / max(bulan_forecast_mulai, 1), 0.0)
     target_runrate_polos = rerata_berjalan * 12
     target_tahunan = np.where(
         np.isnan(target_tahunan),
@@ -504,16 +528,42 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
     # tsb, sehingga utk saat ini TIDAK dipakai sbg override target_tahunan yang valid; target
     # tersirat hanya dipakai sbg fallback TERAKHIR kalau RATE/RUPIAH tertimbang benar2 tidak
     # tersedia sama sekali (lihat blok di atas).
+    #
+    # PLAFON (bukan lantai) target_tahunan: kalau target berbasis histori (RATE_TERTIMBANG,
+    # biasanya dari fallback "sejenis"/cohort krn satker ybs belum/tidak punya histori sendiri)
+    # menyiratkan percepatan belanja jauh di atas kecepatan REALISASI RIIL tahun berjalan (mis.
+    # cohort peer rata2 menghabiskan ~100% pagu tapi satker ybs baru merealisasikan ~25% dgn pola
+    # yang konsisten flat), target itu kemungkinan besar tidak representatif utk satker ybs --
+    # dibanding kasus di atas (yang soal target_tersirat dipakai sbg BATAS BAWAH & mendorong
+    # target naik saat pola aslinya flat), pemakaian sbg PLAFON di sini hanya menahan target agar
+    # TIDAK MELEBIHI apa yang tersirat dari kecepatan riil -- tidak pernah mendorongnya naik --
+    # sehingga tidak mengulang kegagalan kasus PPPK tsb (yang gagal krn arah override-nya ke ATAS).
+    target_tahunan = np.where(
+        np.isnan(target_tersirat), target_tahunan, np.minimum(target_tahunan, target_tersirat)
+    )
+
+    # LANTAI khusus Belanja Pegawai: gaji/tunjangan bersifat RUTIN BULANAN, bukan pengeluaran
+    # satu-kali. Kadang target berbasis RATE_TERTIMBANG x PAGU sudah TERLAMPAUI oleh realisasi
+    # aktual sd sekarang (mis. krn PAGU akun ybs kebetulan lebih kecil dari pola realisasi
+    # riilnya tahun ini) -- kalau dibiarkan, sisa_target jadi 0 dan bulan-bulan berikutnya
+    # diproyeksikan BERHENTI TOTAL (Rp0), padahal gaji/tunjangan rutin nyaris pasti tetap
+    # dibayar. Untuk Pegawai saja, target tidak boleh tersirat lebih kecil dari proyeksi datar
+    # (rerata realisasi bulan berjalan x12). Kategori lain (Barang/Modal) SENGAJA tidak diberi
+    # lantai ini krn pola belanjanya lazim tidak rata sepanjang tahun (mis. pengadaan besar di
+    # awal tahun lalu mereda) -- lihat juga alasan Pegawai tidak dibatasi pagu saat cap di bawah.
+    target_tahunan = np.where(
+        is_pegawai.to_numpy(), np.maximum(target_tahunan, target_runrate_polos), target_tahunan
+    )
 
     hasil_mat = aktual_mat.copy()
     keterangan_list = [""] * len(gabung)
-    if bulan_penuh_terakhir < 12:
+    if bulan_forecast_mulai < 12:
         sisa_target = np.maximum(target_tahunan - aktual_sd_sekarang, 0.0)
-        profil_sisa = profil_mat[:, bulan_penuh_terakhir:]
+        profil_sisa = profil_mat[:, bulan_forecast_mulai:]
         # normalisasi ulang profil HANYA utk bulan-bulan tersisa (inti dari "rolling forecast")
         profil_sisa = np.nan_to_num(profil_sisa, nan=0.0)
         total_sisa = profil_sisa.sum(axis=1, keepdims=True)
-        n_bulan_sisa = 12 - bulan_penuh_terakhir
+        n_bulan_sisa = 12 - bulan_forecast_mulai
         profil_sisa_norm = np.divide(
             profil_sisa, total_sisa, out=np.full_like(profil_sisa, 1.0 / n_bulan_sisa), where=total_sisa > 0
         )
@@ -529,19 +579,20 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
                 if not _cocokkan_kebijakan(kddept_arr[i], akun_arr[i], tahun_y):
                     continue
                 baseline_12 = hasil_mat[i].copy()
-                baseline_12[bulan_penuh_terakhir:] = forecast_depan[i]
-                baru, ket = _terapkan_kebijakan(baseline_12, bulan_penuh_terakhir, kddept_arr[i], akun_arr[i], tahun_y)
-                forecast_depan[i] = baru[bulan_penuh_terakhir:]
+                baseline_12[bulan_forecast_mulai:] = forecast_depan[i]
+                baru, ket = _terapkan_kebijakan(baseline_12, bulan_forecast_mulai, kddept_arr[i], akun_arr[i], tahun_y)
+                forecast_depan[i] = baru[bulan_forecast_mulai:]
                 if ket:
                     keterangan_list[i] = "; ".join(ket)
 
         # Jaring pengaman DULU (sebelum cap): kalau bulan yang berstatus "forecast" ternyata
-        # sudah punya sebagian/seluruh data aktual (mis. laporan sebagian sudah masuk utk bulan
-        # setelah bulan_penuh_terakhir), angka aktual itu jadi batas BAWAH -- tidak boleh
-        # diperkecil oleh forecast. PENTING: ini dilakukan SEBELUM cap pagu (bukan sesudah,
-        # spt versi sebelumnya) supaya cap berikutnya bisa menghitung ulang dgn benar & total
-        # akhir tetap terjamin <= pagu utk kategori selain Pegawai.
-        aktual_sisa = aktual_mat[:, bulan_penuh_terakhir:]
+        # sudah punya sebagian/seluruh data aktual (mis. laporan sebagian sudah masuk, atau
+        # bulan kalender berjalan yang datanya sudah terisi tapi belum tentu lengkap sebulan
+        # penuh -- lihat bulan_forecast_mulai di atas), angka aktual itu jadi batas BAWAH --
+        # tidak boleh diperkecil oleh forecast. PENTING: ini dilakukan SEBELUM cap pagu (bukan
+        # sesudah, spt versi sebelumnya) supaya cap berikutnya bisa menghitung ulang dgn benar &
+        # total akhir tetap terjamin <= pagu utk kategori selain Pegawai.
+        aktual_sisa = aktual_mat[:, bulan_forecast_mulai:]
         forecast_depan = np.maximum(forecast_depan, aktual_sisa)
 
         # Cap maksimal pagu utk kategori selain Belanja Pegawai. Bagian yang SUDAH dikunci oleh
@@ -560,7 +611,7 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
         )
         forecast_depan = aktual_sisa + bagian_estimasi_murni * faktor_skala[:, None]
 
-        hasil_mat[:, bulan_penuh_terakhir:] = forecast_depan
+        hasil_mat[:, bulan_forecast_mulai:] = forecast_depan
 
     for i, c in enumerate(BULAN_KOLOM):
         gabung[f"HASIL_{c}"] = hasil_mat[:, i]
