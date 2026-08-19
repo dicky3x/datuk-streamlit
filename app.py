@@ -13,9 +13,13 @@ Login & loading data yang dipakai bersama semua halaman ada di common.py.
 
 import streamlit as st
 
-from common import get_data, require_login, satker_ada_di_path
+from common import get_data, inject_visual_theme, require_login, satker_ada_di_path
 
 st.set_page_config(page_title="DATUK", page_icon="📊", layout="wide")
+
+# Tema visual global (font Montserrat + efek latar particle constellation) -- dipanggil
+# SEKALI di sini (entrypoint) supaya berlaku di semua halaman, termasuk layar login.
+inject_visual_theme()
 
 df = get_data()
 

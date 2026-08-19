@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 from groq import Groq
 
 # --------------------------------------------------------------------------
@@ -58,6 +59,96 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 GROQ_MODEL_FALLBACK_TOOLS = os.environ.get("GROQ_MODEL_FALLBACK_TOOLS", "moonshotai/kimi-k2-instruct-0905")
 
 BOBOT_TAHUN = {1: 0.50, 2: 0.25, 3: 0.125, 4: 0.0625, 5: 0.0625}
+
+# --------------------------------------------------------------------------
+# Tema visual global -- font Montserrat + efek latar "Particle Constellation"
+# --------------------------------------------------------------------------
+
+def inject_visual_theme():
+    """Suntikkan tema visual global: font Montserrat di seluruh UI Streamlit, dan efek
+    latar belakang partikel bertaut (particle constellation) yang berjalan di belakang
+    konten. Panggil SEKALI saja, paling awal di app.py (sebelum elemen UI lain dirender),
+    supaya berlaku di semua halaman (login & dashboard)."""
+
+    # --- 1. Font Montserrat, dipasang lewat Google Fonts + override CSS Streamlit ---
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap');
+
+        html, body, [class*="st-"], [class*="css-"],
+        .stApp, .stMarkdown, .stButton>button, .stTextInput input,
+        .stSelectbox, .stDataFrame, table, th, td,
+        h1, h2, h3, h4, h5, h6, p, span, div, label {
+            font-family: 'Montserrat', sans-serif !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # --- 2. Efek latar Particle Constellation (tsParticles) ---
+    # Dirender lewat components.html (iframe) supaya <script> benar-benar dieksekusi
+    # browser (script yang disuntik lewat st.markdown/unsafe_allow_html TIDAK dieksekusi).
+    # Iframe-nya sendiri "dibebaskan" dari posisi normalnya lewat window.frameElement
+    # (masih same-origin krn srcdoc) supaya jadi lapisan tetap (fixed) di belakang
+    # seluruh konten Streamlit -- bukan cuma di satu blok di tengah halaman.
+    components.html(
+        """
+        <div id="tsparticles-bg"></div>
+        <script src="https://cdn.jsdelivr.net/npm/tsparticles@2.12.0/tsparticles.bundle.min.js"></script>
+        <script>
+        (function () {
+            // Lepaskan iframe komponen ini dari alur layout normal Streamlit, jadikan
+            // lapisan latar tetap (fixed) yang menutupi seluruh viewport, di BELAKANG
+            // konten (z-index rendah) dan tidak menghalangi klik (pointer-events none).
+            var frame = window.frameElement;
+            if (frame) {
+                frame.style.position = "fixed";
+                frame.style.top = "0";
+                frame.style.left = "0";
+                frame.style.width = "100vw";
+                frame.style.height = "100vh";
+                frame.style.zIndex = "-1";
+                frame.style.pointerEvents = "none";
+                frame.setAttribute("scrolling", "no");
+            }
+
+            function mulai() {
+                tsParticles.load("tsparticles-bg", {
+                    fullScreen: { enable: false },
+                    background: { color: { value: "transparent" } },
+                    fpsLimit: 60,
+                    particles: {
+                        number: { value: 70, density: { enable: true, area: 900 } },
+                        color: { value: "#64748b" },
+                        links: {
+                            enable: true, distance: 130, color: "#94a3b8",
+                            opacity: 0.35, width: 1,
+                        },
+                        move: { enable: true, speed: 0.8, outModes: { default: "out" } },
+                        opacity: { value: 0.5 },
+                        size: { value: { min: 1, max: 3 } },
+                    },
+                    interactivity: {
+                        events: { onHover: { enable: false }, onClick: { enable: false } },
+                    },
+                    detectRetina: true,
+                });
+            }
+            if (window.tsParticles) { mulai(); }
+            else {
+                document.currentScript.previousElementSibling.addEventListener("load", mulai);
+            }
+        })();
+        </script>
+        <style>
+            html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+            #tsparticles-bg { position: fixed; inset: 0; }
+        </style>
+        """,
+        height=1,
+    )
 
 
 def fmt_satker(kode) -> str:
