@@ -542,6 +542,19 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
         np.isnan(target_tersirat), target_tahunan, np.minimum(target_tahunan, target_tersirat)
     )
 
+    # LANTAI khusus Belanja Pegawai: gaji/tunjangan bersifat RUTIN BULANAN, bukan pengeluaran
+    # satu-kali. Kadang target berbasis RATE_TERTIMBANG x PAGU sudah TERLAMPAUI oleh realisasi
+    # aktual sd sekarang (mis. krn PAGU akun ybs kebetulan lebih kecil dari pola realisasi
+    # riilnya tahun ini) -- kalau dibiarkan, sisa_target jadi 0 dan bulan-bulan berikutnya
+    # diproyeksikan BERHENTI TOTAL (Rp0), padahal gaji/tunjangan rutin nyaris pasti tetap
+    # dibayar. Untuk Pegawai saja, target tidak boleh tersirat lebih kecil dari proyeksi datar
+    # (rerata realisasi bulan berjalan x12). Kategori lain (Barang/Modal) SENGAJA tidak diberi
+    # lantai ini krn pola belanjanya lazim tidak rata sepanjang tahun (mis. pengadaan besar di
+    # awal tahun lalu mereda) -- lihat juga alasan Pegawai tidak dibatasi pagu saat cap di bawah.
+    target_tahunan = np.where(
+        is_pegawai.to_numpy(), np.maximum(target_tahunan, target_runrate_polos), target_tahunan
+    )
+
     hasil_mat = aktual_mat.copy()
     keterangan_list = [""] * len(gabung)
     if bulan_forecast_mulai < 12:
@@ -555,19 +568,6 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
             profil_sisa, total_sisa, out=np.full_like(profil_sisa, 1.0 / n_bulan_sisa), where=total_sisa > 0
         )
         forecast_depan = profil_sisa_norm * sisa_target[:, None]
-
-        # Belanja Pegawai: gaji/tunjangan bersifat RUTIN BULANAN, bukan mengikuti bentuk profil
-        # historis dept/cohort lain (yang bisa jadi tidak representatif -- lihat kasus satker
-        # tanpa histori sendiri yang jatuh ke fallback "sejenis"). Basis paling andal utk bulan
-        # ke depan adalah BULAN AKTUAL TERAKHIR yang sudah tercatat (bukan rata2 ataupun
-        # redistribusi profil), diteruskan datar -- kenaikan riil (mis. kebijakan tukin) baru
-        # ditambahkan di atasnya lewat blok KONFIGURASI_KEBIJAKAN di bawah, bukan dari bentuk
-        # historis. Kategori lain (Barang/Modal) TETAP pakai profil_sisa_norm di atas krn
-        # pola belanjanya lazim tidak rata (musiman/proyek).
-        if bulan_forecast_mulai > 0:
-            bulan_terakhir_aktual = aktual_mat[:, bulan_forecast_mulai - 1]
-            baseline_pegawai = np.repeat(bulan_terakhir_aktual[:, None], n_bulan_sisa, axis=1)
-            forecast_depan = np.where(is_pegawai.to_numpy()[:, None], baseline_pegawai, forecast_depan)
 
         # Penyesuaian kebijakan -- hanya baris Pegawai yang match aturan (jumlah baris relatif
         # sedikit, loop per baris di sini aman performanya).
