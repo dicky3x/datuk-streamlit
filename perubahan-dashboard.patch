@@ -1,0 +1,467 @@
+diff --git a/app.py b/app.py
+index f5b05ea..e9d405f 100644
+--- a/app.py
++++ b/app.py
+@@ -13,7 +13,7 @@ Login & loading data yang dipakai bersama semua halaman ada di common.py.
+ 
+ import streamlit as st
+ 
+-from common import get_data, inject_visual_theme, require_login, satker_ada_di_path
++from common import get_data, inject_visual_theme, require_login, satker_ada_di_path, klasifikasi_kewenangan
+ 
+ st.set_page_config(page_title="DATUK", page_icon="📊", layout="wide")
+ 
+@@ -48,5 +48,14 @@ if is_super:
+         st.Page("pages/4_Dashboard_Dana_Transfer_ke_Daerah.py", title="Dashboard Dana Transfer ke Daerah", icon="🏘️")
+     )
+ 
++# Halaman 5 (Satker Dekon & TP) hanya dimasukkan ke navigasi kalau kolom KEWENANGAN
++# memang berisi data yang bisa dipetakan ke Dekonsentrasi/Tugas Pembantuan -- lihat
++# catatan di pages/5_Dashboard_Satker_Dekon_TP.py soal kolom ini perlu di-rebuild dulu
++# dari file sumber yang memuat info kewenangan.
++if "KEWENANGAN" in df.columns and df["KEWENANGAN"].apply(klasifikasi_kewenangan).notna().any():
++    pages.append(
++        st.Page("pages/5_Dashboard_Satker_Dekon_TP.py", title="Dashboard Satker Dekon & TP", icon="🏢")
++    )
++
+ pg = st.navigation(pages)
+ pg.run()
+diff --git a/build_from_combined_csv.py b/build_from_combined_csv.py
+index 8bb453b..c7beaf5 100644
+--- a/build_from_combined_csv.py
++++ b/build_from_combined_csv.py
+@@ -83,6 +83,30 @@ def main():
+     out["OUTPUT"] = df["outputkro_uraian"].astype(str).str.strip()
+     out["AKUN"] = df["akun_uraian"].astype(str).str.strip()
+ 
++    # Kolom kewenangan (KP/KD/DK/TP/UB -- Kantor Pusat/Kantor Daerah/Dekonsentrasi/Tugas
++    # Pembantuan/Urusan Bersama), dipakai Halaman 5 (Dashboard Satker Dekon & TP). Nama
++    # kolom di file sumber bisa berbeda-beda tergantung ekspor Sintesa/SPAN, jadi dicoba
++    # beberapa kemungkinan nama; kalau tidak ada satupun, kolom diisi kosong (Halaman 5
++    # akan menampilkan pesan kalau kolom ini kosong).
++    _kandidat_kolom_kewenangan = [
++        "kewenangan_uraian", "kewenangan", "kdkewenangan_uraian",
++        "kewenangan_kode_uraian", "uraian_kewenangan",
++    ]
++    _kolom_kewenangan_ditemukan = next(
++        (c for c in _kandidat_kolom_kewenangan if c in df.columns), None
++    )
++    if _kolom_kewenangan_ditemukan:
++        out["KEWENANGAN"] = df[_kolom_kewenangan_ditemukan].astype(str).str.strip()
++        print(f"  Kolom kewenangan ditemukan: '{_kolom_kewenangan_ditemukan}'")
++    else:
++        out["KEWENANGAN"] = ""
++        print(
++            "  PERINGATAN: kolom kewenangan (DK/TP/dst.) tidak ditemukan di file sumber -- "
++            "Halaman 5 (Dashboard Satker Dekon & TP) tidak akan bisa menampilkan data. Kalau "
++            "file sumbermu punya kolom ini dengan nama lain, tambahkan ke "
++            "_kandidat_kolom_kewenangan di script ini."
++        )
++
+     before = len(out)
+     out = out.dropna(subset=["KDDEPT", "TAHUN", "KDSATKER", "JENIS BELANJA"])
+     dropped = before - len(out)
+diff --git a/common.py b/common.py
+index 5fd0586..c8aa33b 100644
+--- a/common.py
++++ b/common.py
+@@ -47,6 +47,31 @@ LABEL_JENIS_BELANJA_SINGKAT = {
+ # Kode jenis belanja yang termasuk kategori Transfer ke Daerah (dipakai Halaman 3).
+ KODE_JENIS_TKD = [61, 62, 63, 64, 65, 66]
+ 
++# Kewenangan yang relevan utk Halaman 5 (Dashboard Satker Dekon & TP). Nilai di kolom
++# KEWENANGAN bisa berupa kode singkat ("DK", "TP") atau uraian lengkap ("Dekonsentrasi",
++# "Tugas Pembantuan") tergantung sumber data, jadi dicocokkan dgn kata kunci yang fleksibel.
++KEWENANGAN_KATA_KUNCI = {
++    "Dekonsentrasi": ["dekonsentrasi", "dekon"],
++    "Tugas Pembantuan": ["tugas pembantuan"],
++}
++
++
++def klasifikasi_kewenangan(nilai: str):
++    """Petakan nilai mentah kolom KEWENANGAN ke label baku 'Dekonsentrasi' / 'Tugas
++    Pembantuan', atau None kalau tidak cocok salah satu (mis. Kantor Pusat/Kantor Daerah).
++    Menerima kode singkat (DK/TP) maupun uraian lengkap."""
++    if not nilai:
++        return None
++    v = str(nilai).strip().lower()
++    if v == "dk":
++        return "Dekonsentrasi"
++    if v == "tp":
++        return "Tugas Pembantuan"
++    for label, kata_kunci in KEWENANGAN_KATA_KUNCI.items():
++        if any(k in v for k in kata_kunci):
++            return label
++    return None
++
+ # Label jenis belanja 51 (Belanja Pegawai) -- dipakai di beberapa tempat karena kategori ini
+ # punya perlakuan khusus: rumus proyeksi berbeda & TIDAK dibatasi maksimal pagu (lihat
+ # hitung_proyeksi_per_kategori & isi_tabel_proyeksi).
+@@ -61,26 +86,35 @@ GROQ_MODEL_FALLBACK_TOOLS = os.environ.get("GROQ_MODEL_FALLBACK_TOOLS", "moonsho
+ BOBOT_TAHUN = {1: 0.50, 2: 0.25, 3: 0.125, 4: 0.0625, 5: 0.0625}
+ 
+ # --------------------------------------------------------------------------
+-# Tema visual global -- font Montserrat + efek latar "Particle Constellation"
++# Tema visual global -- font Roboto + efek latar "Particle Constellation"
+ # --------------------------------------------------------------------------
+ 
+ def inject_visual_theme():
+-    """Suntikkan tema visual global: font Montserrat di seluruh UI Streamlit, dan efek
++    """Suntikkan tema visual global: font Roboto di seluruh UI Streamlit, dan efek
+     latar belakang partikel bertaut (particle constellation) yang berjalan di belakang
+     konten. Panggil SEKALI saja, paling awal di app.py (sebelum elemen UI lain dirender),
+     supaya berlaku di semua halaman (login & dashboard)."""
+ 
+-    # --- 1. Font Montserrat, dipasang lewat Google Fonts + override CSS Streamlit ---
++    # --- 1. Font Roboto, dipasang lewat Google Fonts + override CSS Streamlit ---
+     st.markdown(
+         """
+         <style>
+-        @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap');
++        @import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap');
+ 
+         html, body, [class*="st-"], [class*="css-"],
+         .stApp, .stMarkdown, .stButton>button, .stTextInput input,
+         .stSelectbox, .stDataFrame, table, th, td,
+         h1, h2, h3, h4, h5, h6, p, span, div, label {
+-            font-family: 'Montserrat', sans-serif !important;
++            font-family: 'Roboto', sans-serif !important;
++        }
++
++        /* Kecualikan ikon Material Symbols (mis. mata show/hide password, panah
++        collapse sidebar, ikon upload) dari override font di atas -- kalau ikut
++        dipaksa ke font Roboto, glyph ikonnya tidak bisa dirender dan malah
++        muncul sebagai teks mentah (mis. "visibility", "keyboard_double_arrow_left")
++        yang bahkan bisa tumpang tindih dengan teks/tombol di sekitarnya. */
++        [data-testid="stIconMaterial"] {
++            font-family: 'Material Symbols Rounded' !important;
+         }
+         </style>
+         """,
+@@ -305,6 +339,13 @@ def siapkan_data(df_mentah: pd.DataFrame) -> pd.DataFrame:
+         )
+     else:
+         d["_TEKS_CARI"] = ""
++
++    # Kolom kewenangan (KP/KD/DK/TP/UB) dipakai Halaman 5 -- kalau file data yang dipakai
++    # belum punya kolom ini (data lama, belum di-rebuild), isi kosong saja supaya halaman
++    # lain tetap jalan normal dan Halaman 5 bisa mendeteksi & menampilkan pesan yang jelas.
++    if "KEWENANGAN" not in d.columns:
++        d["KEWENANGAN"] = ""
++    d["KEWENANGAN"] = d["KEWENANGAN"].fillna("").astype(str).str.strip()
+     return d
+ 
+ 
+diff --git a/data_prep.py b/data_prep.py
+index 0627097..1e91291 100644
+--- a/data_prep.py
++++ b/data_prep.py
+@@ -20,6 +20,9 @@ KOLOM_DIPAKAI = [
+     "PAGU", "JAN", "FEB", "MAR", "APR", "MEI", "JUN",
+     "JUL", "AGS", "SEP", "OKT", "NOV", "DES",
+     "REALISASI", "SISA PAGU", "BLOKIR",
++    # Kewenangan (KP/KD/DK/TP/UB) -- dipakai Halaman 5 (Dashboard Satker Dekon & TP).
++    # Diambil hanya kalau ada di file sumber; kalau tidak, Halaman 5 akan menampilkan pesan.
++    "KEWENANGAN",
+ ]
+ 
+ # Label jenis belanja (berdasarkan kode akun 2 digit pertama pada data Sintesa/SPAN)
+diff --git a/pages/5_Dashboard_Satker_Dekon_TP.py b/pages/5_Dashboard_Satker_Dekon_TP.py
+new file mode 100644
+index 0000000..865eaa4
+--- /dev/null
++++ b/pages/5_Dashboard_Satker_Dekon_TP.py
+@@ -0,0 +1,192 @@
++"""
++Halaman 5: Dashboard Satker Dekonsentrasi & Tugas Pembantuan
++----------------------------------------------------------------
++Memakai sumber data yang SAMA dengan Halaman 1 (data/pagu_realisasi.csv.gz), difilter
++hanya ke satker dengan kewenangan "Dekonsentrasi" (DK) atau "Tugas Pembantuan" (TP) --
++lihat common.py::klasifikasi_kewenangan.
++
++Catatan penting: kolom KEWENANGAN belum ada di file data/pagu_realisasi.csv.gz saat ini
++(hanya ditambahkan lewat build_from_combined_csv.py / data_prep.py versi terbaru). Kalau
++data belum di-rebuild dari file sumber yang memuat info kewenangan, halaman ini akan
++menampilkan pesan penjelasan alih-alih tabel kosong yang membingungkan.
++
++Akses: satker biasa hanya melihat datanya sendiri (kalau kewenangannya memang DK/TP);
++super user melihat semua satker DK/TP.
++"""
++
++import numpy as np
++import pandas as pd
++import streamlit as st
++
++from common import get_data, tanggal_update_data, fmt_satker, kpi_card, klasifikasi_kewenangan
++
++df_semua = get_data()
++
++# Login sudah ditangani app.py (router) -- halaman ini pun cuma dimasukkan ke navigasi
++# kalau kolom KEWENANGAN tersedia (lihat app.py), tapi kita cek ulang di sini sbg proteksi
++# tambahan (jaga-jaga kalau ada yang coba akses langsung via URL).
++auth = st.session_state.auth
++is_super = auth["role"] == "super"
++SCOPE_KDSATKER = None if is_super else auth["kdsatker"]
++
++st.title("🏢 Dashboard Satker Dekonsentrasi & Tugas Pembantuan")
++st.caption(f"🕒 Data terakhir diperbarui: {tanggal_update_data()}")
++
++if "KEWENANGAN" not in df_semua.columns or (df_semua["KEWENANGAN"].astype(str).str.strip() == "").all():
++    st.info(
++        "Kolom **kewenangan** (Kantor Pusat/Kantor Daerah/Dekonsentrasi/Tugas Pembantuan/"
++        "Urusan Bersama) belum tersedia di data saat ini, jadi Halaman 5 belum bisa "
++        "menampilkan daftar satker Dekonsentrasi & Tugas Pembantuan. Untuk mengaktifkan "
++        "halaman ini, regenerasi `data/pagu_realisasi.csv.gz` dari file sumber yang memuat "
++        "kolom kewenangan (lihat `build_from_combined_csv.py` atau `data_prep.py` -- kolom "
++        "`KEWENANGAN` sudah ditangani otomatis kalau ada di file sumbernya)."
++    )
++    st.stop()
++
++df_semua = df_semua.copy()
++df_semua["KEWENANGAN_LABEL"] = df_semua["KEWENANGAN"].apply(klasifikasi_kewenangan)
++df = df_semua[df_semua["KEWENANGAN_LABEL"].isin(["Dekonsentrasi", "Tugas Pembantuan"])]
++
++if SCOPE_KDSATKER is not None:
++    df = df[df["KDSATKER"] == SCOPE_KDSATKER]
++
++if df.empty:
++    if SCOPE_KDSATKER is not None:
++        st.info("Satker Anda bukan satker dengan kewenangan Dekonsentrasi atau Tugas Pembantuan.")
++    else:
++        st.warning("Tidak ada satker dengan kewenangan Dekonsentrasi atau Tugas Pembantuan di data ini.")
++    st.stop()
++
++
++# --------------------------------------------------------------------------
++# Sidebar - filter
++# --------------------------------------------------------------------------
++
++st.sidebar.header("Filter")
++
++tahun_list = sorted(df["TAHUN"].unique(), reverse=True)
++tahun = st.sidebar.selectbox("Tahun", tahun_list)
++df_tahun = df[df["TAHUN"] == tahun]
++
++satker_options = (
++    df_tahun[["KDSATKER", "NMSATKER"]]
++    .drop_duplicates()
++    .sort_values("KDSATKER")
++)
++satker_options["LABEL"] = satker_options["KDSATKER"].apply(fmt_satker) + " - " + satker_options["NMSATKER"]
++
++if SCOPE_KDSATKER is not None:
++    # Satker biasa: tidak perlu dropdown, datanya memang sudah dibatasi ke satkernya sendiri.
++    satker_pilih_label = satker_options["LABEL"].tolist()
++    df_satker_filter = df_tahun
++else:
++    SEMUA_SATKER = "— Semua Satker —"
++    satker_pilih_label = st.sidebar.multiselect(
++        "Satker", satker_options["LABEL"].tolist(), default=[],
++        placeholder="Semua satker (kosongkan = tampilkan semua)",
++    )
++    if satker_pilih_label:
++        kdsatker_pilih = satker_options.loc[
++            satker_options["LABEL"].isin(satker_pilih_label), "KDSATKER"
++        ]
++        df_satker_filter = df_tahun[df_tahun["KDSATKER"].isin(kdsatker_pilih)]
++    else:
++        df_satker_filter = df_tahun
++
++jenis_options = (
++    df_tahun[["JENIS BELANJA", "LABEL_JENIS_BELANJA"]]
++    .drop_duplicates()
++    .sort_values("JENIS BELANJA")
++)
++jenis_pilih = st.sidebar.multiselect(
++    "Jenis Belanja", jenis_options["LABEL_JENIS_BELANJA"].tolist(), default=[],
++    placeholder="Semua jenis belanja (kosongkan = tampilkan semua)",
++)
++if jenis_pilih:
++    df_final = df_satker_filter[df_satker_filter["LABEL_JENIS_BELANJA"].isin(jenis_pilih)]
++else:
++    df_final = df_satker_filter
++
++
++# --------------------------------------------------------------------------
++# KPI ringkas
++# --------------------------------------------------------------------------
++
++pagu_total = df_final["PAGU"].sum()
++realisasi_total = df_final["REALISASI"].sum()
++blokir_total = df_final["BLOKIR"].sum() if "BLOKIR" in df_final.columns else 0
++persen_total = (realisasi_total / pagu_total * 100) if pagu_total else 0
++jumlah_satker = df_final["KDSATKER"].nunique()
++
++k1, k2, k3, k4 = st.columns(4)
++with k1:
++    kpi_card("Jumlah Satker", f"{jumlah_satker:,}")
++with k2:
++    kpi_card("Total Pagu", f"Rp {pagu_total:,.0f}")
++with k3:
++    kpi_card("Total Realisasi", f"Rp {realisasi_total:,.0f}", f"{persen_total:.1f}% dari pagu")
++with k4:
++    kpi_card("Total Blokir", f"Rp {blokir_total:,.0f}")
++
++st.divider()
++
++
++# --------------------------------------------------------------------------
++# Tabel: kode satker, nama satker, kewenangan, pagu, realisasi, blokir, % realisasi
++# --------------------------------------------------------------------------
++
++st.subheader("Rincian per Satker")
++
++agg_cols = {"PAGU": "sum", "REALISASI": "sum"}
++if "BLOKIR" in df_final.columns:
++    agg_cols["BLOKIR"] = "sum"
++
++tabel = (
++    df_final.groupby(["KDSATKER", "NMSATKER", "KEWENANGAN_LABEL"])
++    .agg(agg_cols)
++    .reset_index()
++)
++if "BLOKIR" not in tabel.columns:
++    tabel["BLOKIR"] = 0.0
++
++tabel["Persentase Realisasi"] = (
++    tabel["REALISASI"] / tabel["PAGU"].replace(0, np.nan) * 100
++).fillna(0)
++
++tabel["Kode Satker"] = tabel["KDSATKER"].apply(fmt_satker)
++tabel = tabel.rename(columns={
++    "NMSATKER": "Nama Satker",
++    "KEWENANGAN_LABEL": "Kewenangan",
++    "PAGU": "Pagu",
++    "REALISASI": "Realisasi",
++    "BLOKIR": "Blokir",
++})
++tabel = tabel[["Kode Satker", "Nama Satker", "Kewenangan", "Pagu", "Realisasi", "Blokir", "Persentase Realisasi"]]
++tabel = tabel.sort_values("Pagu", ascending=False)
++
++baris_total = pd.DataFrame([{
++    "Kode Satker": "", "Nama Satker": "TOTAL", "Kewenangan": "",
++    "Pagu": tabel["Pagu"].sum(),
++    "Realisasi": tabel["Realisasi"].sum(),
++    "Blokir": tabel["Blokir"].sum(),
++    "Persentase Realisasi": (
++        tabel["Realisasi"].sum() / tabel["Pagu"].sum() * 100
++    ) if tabel["Pagu"].sum() else 0,
++}])
++tabel_tampil = pd.concat([tabel, baris_total], ignore_index=True)
++
++
++def _tebalkan_total(row):
++    return ["font-weight: bold;" if row["Nama Satker"] == "TOTAL" else "" for _ in row]
++
++
++st.dataframe(
++    tabel_tampil.style
++    .apply(_tebalkan_total, axis=1)
++    .format({
++        "Pagu": "Rp {:,.0f}", "Realisasi": "Rp {:,.0f}", "Blokir": "Rp {:,.0f}",
++        "Persentase Realisasi": "{:.1f}%",
++    }),
++    use_container_width=True,
++    hide_index=True,
++)
+diff --git a/view_dashboard_satker.py b/view_dashboard_satker.py
+index ae65df6..a8a2e2a 100644
+--- a/view_dashboard_satker.py
++++ b/view_dashboard_satker.py
+@@ -322,30 +322,7 @@ if bulan_terakhir > bulan_penuh_terakhir_tampilan:
+ _label_batas = BULAN_LABEL.get(bulan_penuh_terakhir_tampilan, "-") if bulan_penuh_terakhir_tampilan else None
+ _batas_teks = f"Bulan setelah {_label_batas}" if _label_batas else "Seluruh bulan tahun ini"
+ 
+-if metode_proyeksi == "historis":
+-    _teks_confidence = (
+-        f" Skor keyakinan (confidence score) proyeksi entitas ini: **{confidence_keseluruhan:.0f}/100** "
+-        "(makin tinggi = pola historisnya makin stabil/konsisten dari tahun ke tahun)."
+-        if confidence_keseluruhan is not None else ""
+-    )
+-    st.caption(
+-        "Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif) supaya terlihat bulan mana "
+-        f"yang realisasinya naik/turun. {_batas_teks} adalah **proyeksi hybrid**: untuk tiap "
+-        "kombinasi satker-akun dibentuk profil bulanan dari rerata tertimbang 5 tahun histori "
+-        "(bobot 50%-25%-12,5%-6,25%-6,25% utk tahun y-1 s.d. y-5), lalu setiap kali ada realisasi "
+-        "bulan baru, sisa target tahunan didistribusikan ulang (rolling forecast) ke bulan-bulan "
+-        "yang tersisa memakai proporsi historis bulan-bulan itu yang dinormalisasi ulang. Satker/akun "
+-        "tanpa histori sendiri memakai profil satker sejenis (kementerian+jenis belanja+kelompok "
+-        f"pagu yang sama), atau rata-rata seluruh satker kalau profil sejenis pun tidak "
+-        f"tersedia.{_teks_confidence}{_catatan_bulan_berjalan}"
+-    )
+-else:
+-    st.caption(
+-        "Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif) supaya terlihat bulan mana "
+-        f"yang realisasinya naik/turun. {_batas_teks} adalah proyeksi. Belum ada data historis "
+-        f"(tahun sebelum {tahun}) untuk entitas ini, sehingga proyeksi memakai metode cadangan: "
+-        f"rata-rata realisasi per bulan pada tahun berjalan dikalikan 12 bulan.{_catatan_bulan_berjalan}"
+-    )
++st.caption("Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif)")
+ 
+ # --------------------------------------------------------------------------
+ # Tabel realisasi per bulan per jenis belanja (aktual vs proyeksi), ditranspose:
+@@ -479,28 +456,7 @@ styled_tabel = (
+     .format("{:.1f}%", subset=pd.IndexSlice[BARIS_PERSEN, :])
+ )
+ st.dataframe(styled_tabel, use_container_width=True)
+-st.caption(
+-    "🟨 Sel berwarna kuning = bulan yang belum benar-benar berakhir (termasuk bulan kalender "
+-    "yang sedang berjalan, meskipun sebagian besar datanya -- mis. gaji pokok & tunjangan "
+-    "kinerja -- biasanya sudah tercatat penuh di awal bulan; komponen lebih kecil spt uang "
+-    "makan/lembur sekitar tanggal 10-15 atau kekurangan gaji induk pegawai pindahan masih "
+-    "mungkin menambah angkanya) atau bulan yang datanya memang belum cukup lengkap. Angkanya "
+-    "sendiri sudah memakai data aktual sejauh tersedia, ditambah proyeksi hybrid utk sisanya: "
+-    "profil bulanan tertimbang 5-tahun per kombinasi satker-akun, didistribusikan ulang tiap "
+-    "ada realisasi bulan baru (rolling forecast) -- lihat penjelasan lengkap di atas grafik "
+-    f"tren. Khusus **{LABEL_BELANJA_PEGAWAI}**, proyeksi TIDAK dibatasi maksimal pagu tahun "
+-    f"berjalan (bisa melebihi, mis. karena kenaikan tunjangan) dan sudah memperhitungkan "
+-    "penyesuaian kebijakan (kalau ada) dari tabel konfigurasi kebijakan, dan mengecualikan "
+-    "bulan-bulan yang ditandai anomali satu kali (mis. rapel gaji terlambat) dari perhitungan "
+-    "kecepatan belanja supaya satu bulan yang njomplang tidak membuat proyeksi bulan-bulan "
+-    "normal berikutnya ikut meroket. Jenis belanja lain "
+-    "dibatasi maksimal 100% pagu. Satker/akun tanpa histori sendiri memakai profil satker "
+-    "sejenis atau rata-rata seluruh satker. Baris \"Total Realisasi\" hanya menjumlahkan uang "
+-    "yang sudah benar-benar terealisasi (bulan penuh saja), sedangkan baris \"Total Realisasi + "
+-    "Proyeksi Akhir Tahun\" menjumlahkan realisasi ditambah estimasi bulan-bulan yang belum "
+-    "berakhir/belum terjadi. Kolom PAGU & baris PAGU tidak ditandai kuning karena berupa acuan, "
+-    "bukan proyeksi."
+-)
++st.caption("🟨 Sel berwarna kuning = proyeksi")
+ 
+ # --- Skor keyakinan (confidence score) per jenis belanja ---
+ if not skor_confidence_per_jenis.dropna().empty:
+@@ -558,34 +514,6 @@ st.caption(
+ st.divider()
+ 
+ 
+-# --------------------------------------------------------------------------
+-# Heatmap deviasi antar satker -- hanya ditampilkan saat cakupan mencakup lebih dari 1 satker
+-# (mis. "Semua Satker" di satu kementerian, atau super user tanpa filter satker spesifik).
+-# --------------------------------------------------------------------------
+-
+-if kdsatker is None:
+-    st.subheader("Heatmap Deviasi Penyerapan Antar Satker")
+-    df_heatmap = forecasting.hitung_heatmap_deviasi(df_forecast, df, tahun, kddept=kddept)
+-    if df_heatmap.empty:
+-        st.info("Belum cukup data (belum ada bulan penuh tahun ini) untuk menghitung deviasi.")
+-    else:
+-        fig_heat = px.imshow(
+-            df_heatmap.values, x=list(df_heatmap.columns), y=list(df_heatmap.index),
+-            color_continuous_scale="RdYlGn", color_continuous_midpoint=0, aspect="auto",
+-            labels=dict(color="Deviasi (poin %)"),
+-        )
+-        fig_heat.update_layout(height=max(300, 28 * len(df_heatmap)))
+-        st.plotly_chart(fig_heat, use_container_width=True)
+-        st.caption(
+-            "Deviasi = (persen realisasi kumulatif aktual satker itu bulan ybs) − (rata-rata "
+-            "tertimbang persen realisasi kumulatif historis satker itu di bulan yang sama). "
+-            "Hijau = penyerapan lebih cepat dari kebiasaan satker itu sendiri, merah = lebih "
+-            f"lambat. Dibatasi ke {min(25, len(df_heatmap))} satker dengan pagu terbesar dalam "
+-            "cakupan filter saat ini supaya tetap terbaca."
+-        )
+-    st.divider()
+-
+-
+ # --------------------------------------------------------------------------
+ # Pencarian tematik lintas satker/kementerian/provinsi -- dipakai AI di chat box
+ # untuk menjawab pertanyaan seperti "berapa pagu ketahanan pangan di Riau?" atau
