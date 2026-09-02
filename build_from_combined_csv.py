@@ -83,6 +83,30 @@ def main():
     out["OUTPUT"] = df["outputkro_uraian"].astype(str).str.strip()
     out["AKUN"] = df["akun_uraian"].astype(str).str.strip()
 
+    # Kolom kewenangan (KP/KD/DK/TP/UB -- Kantor Pusat/Kantor Daerah/Dekonsentrasi/Tugas
+    # Pembantuan/Urusan Bersama), dipakai Halaman 5 (Dashboard Satker Dekon & TP). Nama
+    # kolom di file sumber bisa berbeda-beda tergantung ekspor Sintesa/SPAN, jadi dicoba
+    # beberapa kemungkinan nama; kalau tidak ada satupun, kolom diisi kosong (Halaman 5
+    # akan menampilkan pesan kalau kolom ini kosong).
+    _kandidat_kolom_kewenangan = [
+        "kewenangan_uraian", "kewenangan", "kdkewenangan_uraian",
+        "kewenangan_kode_uraian", "uraian_kewenangan",
+    ]
+    _kolom_kewenangan_ditemukan = next(
+        (c for c in _kandidat_kolom_kewenangan if c in df.columns), None
+    )
+    if _kolom_kewenangan_ditemukan:
+        out["KEWENANGAN"] = df[_kolom_kewenangan_ditemukan].astype(str).str.strip()
+        print(f"  Kolom kewenangan ditemukan: '{_kolom_kewenangan_ditemukan}'")
+    else:
+        out["KEWENANGAN"] = ""
+        print(
+            "  PERINGATAN: kolom kewenangan (DK/TP/dst.) tidak ditemukan di file sumber -- "
+            "Halaman 5 (Dashboard Satker Dekon & TP) tidak akan bisa menampilkan data. Kalau "
+            "file sumbermu punya kolom ini dengan nama lain, tambahkan ke "
+            "_kandidat_kolom_kewenangan di script ini."
+        )
+
     before = len(out)
     out = out.dropna(subset=["KDDEPT", "TAHUN", "KDSATKER", "JENIS BELANJA"])
     dropped = before - len(out)

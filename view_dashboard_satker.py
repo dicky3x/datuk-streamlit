@@ -322,30 +322,7 @@ if bulan_terakhir > bulan_penuh_terakhir_tampilan:
 _label_batas = BULAN_LABEL.get(bulan_penuh_terakhir_tampilan, "-") if bulan_penuh_terakhir_tampilan else None
 _batas_teks = f"Bulan setelah {_label_batas}" if _label_batas else "Seluruh bulan tahun ini"
 
-if metode_proyeksi == "historis":
-    _teks_confidence = (
-        f" Skor keyakinan (confidence score) proyeksi entitas ini: **{confidence_keseluruhan:.0f}/100** "
-        "(makin tinggi = pola historisnya makin stabil/konsisten dari tahun ke tahun)."
-        if confidence_keseluruhan is not None else ""
-    )
-    st.caption(
-        "Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif) supaya terlihat bulan mana "
-        f"yang realisasinya naik/turun. {_batas_teks} adalah **proyeksi hybrid**: untuk tiap "
-        "kombinasi satker-akun dibentuk profil bulanan dari rerata tertimbang 5 tahun histori "
-        "(bobot 50%-25%-12,5%-6,25%-6,25% utk tahun y-1 s.d. y-5), lalu setiap kali ada realisasi "
-        "bulan baru, sisa target tahunan didistribusikan ulang (rolling forecast) ke bulan-bulan "
-        "yang tersisa memakai proporsi historis bulan-bulan itu yang dinormalisasi ulang. Satker/akun "
-        "tanpa histori sendiri memakai profil satker sejenis (kementerian+jenis belanja+kelompok "
-        f"pagu yang sama), atau rata-rata seluruh satker kalau profil sejenis pun tidak "
-        f"tersedia.{_teks_confidence}{_catatan_bulan_berjalan}"
-    )
-else:
-    st.caption(
-        "Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif) supaya terlihat bulan mana "
-        f"yang realisasinya naik/turun. {_batas_teks} adalah proyeksi. Belum ada data historis "
-        f"(tahun sebelum {tahun}) untuk entitas ini, sehingga proyeksi memakai metode cadangan: "
-        f"rata-rata realisasi per bulan pada tahun berjalan dikalikan 12 bulan.{_catatan_bulan_berjalan}"
-    )
+st.caption("Grafik ini menampilkan realisasi tiap bulan (bukan kumulatif)")
 
 # --------------------------------------------------------------------------
 # Tabel realisasi per bulan per jenis belanja (aktual vs proyeksi), ditranspose:
@@ -479,28 +456,7 @@ styled_tabel = (
     .format("{:.1f}%", subset=pd.IndexSlice[BARIS_PERSEN, :])
 )
 st.dataframe(styled_tabel, use_container_width=True)
-st.caption(
-    "🟨 Sel berwarna kuning = bulan yang belum benar-benar berakhir (termasuk bulan kalender "
-    "yang sedang berjalan, meskipun sebagian besar datanya -- mis. gaji pokok & tunjangan "
-    "kinerja -- biasanya sudah tercatat penuh di awal bulan; komponen lebih kecil spt uang "
-    "makan/lembur sekitar tanggal 10-15 atau kekurangan gaji induk pegawai pindahan masih "
-    "mungkin menambah angkanya) atau bulan yang datanya memang belum cukup lengkap. Angkanya "
-    "sendiri sudah memakai data aktual sejauh tersedia, ditambah proyeksi hybrid utk sisanya: "
-    "profil bulanan tertimbang 5-tahun per kombinasi satker-akun, didistribusikan ulang tiap "
-    "ada realisasi bulan baru (rolling forecast) -- lihat penjelasan lengkap di atas grafik "
-    f"tren. Khusus **{LABEL_BELANJA_PEGAWAI}**, proyeksi TIDAK dibatasi maksimal pagu tahun "
-    f"berjalan (bisa melebihi, mis. karena kenaikan tunjangan) dan sudah memperhitungkan "
-    "penyesuaian kebijakan (kalau ada) dari tabel konfigurasi kebijakan, dan mengecualikan "
-    "bulan-bulan yang ditandai anomali satu kali (mis. rapel gaji terlambat) dari perhitungan "
-    "kecepatan belanja supaya satu bulan yang njomplang tidak membuat proyeksi bulan-bulan "
-    "normal berikutnya ikut meroket. Jenis belanja lain "
-    "dibatasi maksimal 100% pagu. Satker/akun tanpa histori sendiri memakai profil satker "
-    "sejenis atau rata-rata seluruh satker. Baris \"Total Realisasi\" hanya menjumlahkan uang "
-    "yang sudah benar-benar terealisasi (bulan penuh saja), sedangkan baris \"Total Realisasi + "
-    "Proyeksi Akhir Tahun\" menjumlahkan realisasi ditambah estimasi bulan-bulan yang belum "
-    "berakhir/belum terjadi. Kolom PAGU & baris PAGU tidak ditandai kuning karena berupa acuan, "
-    "bukan proyeksi."
-)
+st.caption("🟨 Sel berwarna kuning = proyeksi")
 
 # --- Skor keyakinan (confidence score) per jenis belanja ---
 if not skor_confidence_per_jenis.dropna().empty:
@@ -556,34 +512,6 @@ st.caption(
 )
 
 st.divider()
-
-
-# --------------------------------------------------------------------------
-# Heatmap deviasi antar satker -- hanya ditampilkan saat cakupan mencakup lebih dari 1 satker
-# (mis. "Semua Satker" di satu kementerian, atau super user tanpa filter satker spesifik).
-# --------------------------------------------------------------------------
-
-if kdsatker is None:
-    st.subheader("Heatmap Deviasi Penyerapan Antar Satker")
-    df_heatmap = forecasting.hitung_heatmap_deviasi(df_forecast, df, tahun, kddept=kddept)
-    if df_heatmap.empty:
-        st.info("Belum cukup data (belum ada bulan penuh tahun ini) untuk menghitung deviasi.")
-    else:
-        fig_heat = px.imshow(
-            df_heatmap.values, x=list(df_heatmap.columns), y=list(df_heatmap.index),
-            color_continuous_scale="RdYlGn", color_continuous_midpoint=0, aspect="auto",
-            labels=dict(color="Deviasi (poin %)"),
-        )
-        fig_heat.update_layout(height=max(300, 28 * len(df_heatmap)))
-        st.plotly_chart(fig_heat, use_container_width=True)
-        st.caption(
-            "Deviasi = (persen realisasi kumulatif aktual satker itu bulan ybs) − (rata-rata "
-            "tertimbang persen realisasi kumulatif historis satker itu di bulan yang sama). "
-            "Hijau = penyerapan lebih cepat dari kebiasaan satker itu sendiri, merah = lebih "
-            f"lambat. Dibatasi ke {min(25, len(df_heatmap))} satker dengan pagu terbesar dalam "
-            "cakupan filter saat ini supaya tetap terbaca."
-        )
-    st.divider()
 
 
 # --------------------------------------------------------------------------

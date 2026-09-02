@@ -47,6 +47,31 @@ LABEL_JENIS_BELANJA_SINGKAT = {
 # Kode jenis belanja yang termasuk kategori Transfer ke Daerah (dipakai Halaman 3).
 KODE_JENIS_TKD = [61, 62, 63, 64, 65, 66]
 
+# Kewenangan yang relevan utk Halaman 5 (Dashboard Satker Dekon & TP). Nilai di kolom
+# KEWENANGAN bisa berupa kode singkat ("DK", "TP") atau uraian lengkap ("Dekonsentrasi",
+# "Tugas Pembantuan") tergantung sumber data, jadi dicocokkan dgn kata kunci yang fleksibel.
+KEWENANGAN_KATA_KUNCI = {
+    "Dekonsentrasi": ["dekonsentrasi", "dekon"],
+    "Tugas Pembantuan": ["tugas pembantuan"],
+}
+
+
+def klasifikasi_kewenangan(nilai: str):
+    """Petakan nilai mentah kolom KEWENANGAN ke label baku 'Dekonsentrasi' / 'Tugas
+    Pembantuan', atau None kalau tidak cocok salah satu (mis. Kantor Pusat/Kantor Daerah).
+    Menerima kode singkat (DK/TP) maupun uraian lengkap."""
+    if not nilai:
+        return None
+    v = str(nilai).strip().lower()
+    if v == "dk":
+        return "Dekonsentrasi"
+    if v == "tp":
+        return "Tugas Pembantuan"
+    for label, kata_kunci in KEWENANGAN_KATA_KUNCI.items():
+        if any(k in v for k in kata_kunci):
+            return label
+    return None
+
 # Label jenis belanja 51 (Belanja Pegawai) -- dipakai di beberapa tempat karena kategori ini
 # punya perlakuan khusus: rumus proyeksi berbeda & TIDAK dibatasi maksimal pagu (lihat
 # hitung_proyeksi_per_kategori & isi_tabel_proyeksi).
@@ -61,26 +86,35 @@ GROQ_MODEL_FALLBACK_TOOLS = os.environ.get("GROQ_MODEL_FALLBACK_TOOLS", "moonsho
 BOBOT_TAHUN = {1: 0.50, 2: 0.25, 3: 0.125, 4: 0.0625, 5: 0.0625}
 
 # --------------------------------------------------------------------------
-# Tema visual global -- font Montserrat + efek latar "Particle Constellation"
+# Tema visual global -- font Roboto + efek latar "Particle Constellation"
 # --------------------------------------------------------------------------
 
 def inject_visual_theme():
-    """Suntikkan tema visual global: font Montserrat di seluruh UI Streamlit, dan efek
+    """Suntikkan tema visual global: font Roboto di seluruh UI Streamlit, dan efek
     latar belakang partikel bertaut (particle constellation) yang berjalan di belakang
     konten. Panggil SEKALI saja, paling awal di app.py (sebelum elemen UI lain dirender),
     supaya berlaku di semua halaman (login & dashboard)."""
 
-    # --- 1. Font Montserrat, dipasang lewat Google Fonts + override CSS Streamlit ---
+    # --- 1. Font Roboto, dipasang lewat Google Fonts + override CSS Streamlit ---
     st.markdown(
         """
         <style>
-        @import url('https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100..900;1,100..900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap');
 
         html, body, [class*="st-"], [class*="css-"],
         .stApp, .stMarkdown, .stButton>button, .stTextInput input,
         .stSelectbox, .stDataFrame, table, th, td,
         h1, h2, h3, h4, h5, h6, p, span, div, label {
-            font-family: 'Montserrat', sans-serif !important;
+            font-family: 'Roboto', sans-serif !important;
+        }
+
+        /* Kecualikan ikon Material Symbols (mis. mata show/hide password, panah
+        collapse sidebar, ikon upload) dari override font di atas -- kalau ikut
+        dipaksa ke font Roboto, glyph ikonnya tidak bisa dirender dan malah
+        muncul sebagai teks mentah (mis. "visibility", "keyboard_double_arrow_left")
+        yang bahkan bisa tumpang tindih dengan teks/tombol di sekitarnya. */
+        [data-testid="stIconMaterial"] {
+            font-family: 'Material Symbols Rounded' !important;
         }
         </style>
         """,
@@ -305,6 +339,13 @@ def siapkan_data(df_mentah: pd.DataFrame) -> pd.DataFrame:
         )
     else:
         d["_TEKS_CARI"] = ""
+
+    # Kolom kewenangan (KP/KD/DK/TP/UB) dipakai Halaman 5 -- kalau file data yang dipakai
+    # belum punya kolom ini (data lama, belum di-rebuild), isi kosong saja supaya halaman
+    # lain tetap jalan normal dan Halaman 5 bisa mendeteksi & menampilkan pesan yang jelas.
+    if "KEWENANGAN" not in d.columns:
+        d["KEWENANGAN"] = ""
+    d["KEWENANGAN"] = d["KEWENANGAN"].fillna("").astype(str).str.strip()
     return d
 
 

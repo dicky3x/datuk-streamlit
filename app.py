@@ -13,7 +13,7 @@ Login & loading data yang dipakai bersama semua halaman ada di common.py.
 
 import streamlit as st
 
-from common import get_data, inject_visual_theme, require_login, satker_ada_di_path
+from common import get_data, inject_visual_theme, require_login, satker_ada_di_path, klasifikasi_kewenangan
 
 st.set_page_config(page_title="DATUK", page_icon="📊", layout="wide")
 
@@ -46,6 +46,15 @@ if is_super or satker_ada_di_path("data/program_strategis.csv.gz", scope_kdsatke
 if is_super:
     pages.append(
         st.Page("pages/4_Dashboard_Dana_Transfer_ke_Daerah.py", title="Dashboard Dana Transfer ke Daerah", icon="🏘️")
+    )
+
+# Halaman 5 (Satker Dekon & TP) hanya dimasukkan ke navigasi kalau kolom KEWENANGAN
+# memang berisi data yang bisa dipetakan ke Dekonsentrasi/Tugas Pembantuan -- lihat
+# catatan di pages/5_Dashboard_Satker_Dekon_TP.py soal kolom ini perlu di-rebuild dulu
+# dari file sumber yang memuat info kewenangan.
+if "KEWENANGAN" in df.columns and df["KEWENANGAN"].apply(klasifikasi_kewenangan).notna().any():
+    pages.append(
+        st.Page("pages/5_Dashboard_Satker_Dekon_TP.py", title="Dashboard Satker Dekon & TP", icon="🏢")
     )
 
 pg = st.navigation(pages)

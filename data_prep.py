@@ -20,6 +20,9 @@ KOLOM_DIPAKAI = [
     "PAGU", "JAN", "FEB", "MAR", "APR", "MEI", "JUN",
     "JUL", "AGS", "SEP", "OKT", "NOV", "DES",
     "REALISASI", "SISA PAGU", "BLOKIR",
+    # Kewenangan (KP/KD/DK/TP/UB) -- dipakai Halaman 5 (Dashboard Satker Dekon & TP).
+    # Diambil hanya kalau ada di file sumber; kalau tidak, Halaman 5 akan menampilkan pesan.
+    "KEWENANGAN",
 ]
 
 # Label jenis belanja (berdasarkan kode akun 2 digit pertama pada data Sintesa/SPAN)
