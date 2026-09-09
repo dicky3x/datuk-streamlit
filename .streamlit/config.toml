@@ -1,0 +1,8 @@
+# Matikan navigasi sidebar otomatis bawaan Streamlit (yang menampilkan daftar nama file
+# mentah di folder pages/, mis. "5 Dashboard Satker Dekon TP"). Tanpa ini, navigasi otomatis
+# tsb bisa sempat tampil ke pengunjung yang BELUM login -- terutama tepat setelah reboot/
+# redeploy, sebelum ada satu pun sesi yang memanggil st.navigation() (baca app.py). Navigasi
+# custom kita sendiri (dibangun lewat st.navigation(pages) di app.py setelah login berhasil)
+# TIDAK terpengaruh oleh setting ini -- yang dimatikan hanya nav otomatis bawaan.
+[client]
+showSidebarNavigation = false

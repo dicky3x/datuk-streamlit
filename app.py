@@ -17,6 +17,12 @@ from common import get_data, inject_visual_theme, require_login, satker_ada_di_p
 
 st.set_page_config(page_title="DATUK", page_icon="📊", layout="wide")
 
+# Matikan navigasi sidebar otomatis bawaan Streamlit (baca .streamlit/config.toml utk
+# penjelasan lengkap). Dipanggil juga di sini (selain lewat config.toml) sbg lapisan
+# pengaman kedua -- st.set_option utk client.showSidebarNavigation memang boleh dipanggil
+# langsung di kode (lihat docs st.set_option).
+st.set_option("client.showSidebarNavigation", False)
+
 # Tema visual global (font Montserrat + efek latar particle constellation) -- dipanggil
 # SEKALI di sini (entrypoint) supaya berlaku di semua halaman, termasuk layar login.
 inject_visual_theme()
