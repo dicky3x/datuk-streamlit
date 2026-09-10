@@ -9,6 +9,18 @@ Menentukan halaman mana yang muncul di navigasi berdasarkan status login:
 - Dashboard Dana Transfer ke Daerah: HANYA muncul & bisa diakses oleh super user.
 
 Login & loading data yang dipakai bersama semua halaman ada di common.py.
+
+Catatan ttg navigasi sebelum/sesudah login:
+st.navigation() DIPANGGIL DI SETIAP KONDISI DI BAWAH (baik sebelum maupun sesudah login),
+bukan cuma sesudah login. Ini penting karena dua alasan:
+1. Begitu SATU SESI SAJA memanggil st.navigation(), Streamlit langsung & PERMANEN (utk
+   semua sesi lain, sampai server di-restart) berhenti menampilkan navigasi otomatis bawaan
+   (daftar nama file mentah di folder pages/). Kalau st.navigation() cuma dipanggil SETELAH
+   login, ada jendela waktu (dari server baru nyala sampai orang pertama berhasil login)
+   dimana pengunjung yang BELUM login bisa melihat navigasi otomatis bawaan itu.
+2. Dengan memanggil st.navigation() juga sebelum login -- pakai position="hidden" -- navigasi
+   tidak digambar sama sekali selama di layar login. Begitu login berhasil, kita panggil
+   st.navigation() lagi dengan position="sidebar" (default) sehingga navigasi muncul kembali.
 """
 
 import streamlit as st
@@ -17,11 +29,25 @@ from common import get_data, inject_visual_theme, require_login, satker_ada_di_p
 
 st.set_page_config(page_title="DATUK", page_icon="📊", layout="wide")
 
-# Tema visual global (font Montserrat + efek latar particle constellation) -- dipanggil
+# Tema visual global (font Roboto + efek latar particle constellation) -- dipanggil
 # SEKALI di sini (entrypoint) supaya berlaku di semua halaman, termasuk layar login.
 inject_visual_theme()
 
 df = get_data()
+
+if "auth" not in st.session_state:
+    st.session_state.auth = None
+
+if st.session_state.auth is None:
+    # Belum login -- panggil st.navigation() dengan position="hidden" (bukan di-skip total)
+    # supaya navigasi otomatis bawaan Streamlit tidak akan pernah sempat muncul (lihat
+    # catatan di atas), sekaligus navigasi kita sendiri pun tidak tampak sampai login sukses.
+    halaman_login = st.Page(
+        lambda: require_login(df, judul_halaman="DATUK"), title="Login", default=True
+    )
+    pg = st.navigation([halaman_login], position="hidden")
+    pg.run()
+    st.stop()
 
 # Login ditangani SEKALI di sini (router). Halaman lain tinggal baca st.session_state.auth,
 # tidak perlu panggil require_login() lagi (biar tidak dobel render status login/logout).
@@ -57,5 +83,5 @@ if "KEWENANGAN" in df.columns and df["KEWENANGAN"].apply(klasifikasi_kewenangan)
         st.Page("pages/5_Dashboard_Satker_Dekon_TP.py", title="Dashboard Satker Dekon & TP", icon="🏢")
     )
 
-pg = st.navigation(pages)
+pg = st.navigation(pages)  # position="sidebar" (default) -- navigasi tampil
 pg.run()
