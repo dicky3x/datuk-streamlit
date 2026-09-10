@@ -141,19 +141,34 @@ def _cocokkan_kebijakan(kddept: int, akun: str, tahun_y: int) -> list:
 
 
 def _terapkan_kebijakan(
-    baseline_bulanan: np.ndarray, bulan_penuh_terakhir: int, kddept: int, akun: str, tahun_y: int,
+    baseline_bulanan: np.ndarray, bulan_penuh_terakhir: int, aktual_bulanan: np.ndarray,
+    kddept: int, akun: str, tahun_y: int,
 ) -> tuple:
     """Terapkan penyesuaian kebijakan ke array baseline forecast 12 bulan (hanya bulan-bulan
     yang MASIH diproyeksikan, yaitu index >= bulan_penuh_terakhir, karena bulan yang sudah
-    jadi aktual tidak boleh diubah). Return (array_baru, daftar_keterangan_penyesuaian).
+    jadi aktual "penuh" tidak boleh diubah). Return (array_baru, daftar_keterangan_penyesuaian).
 
-    Logika per aturan: baseline forecast bulan m (m 1-indexed) diasumsikan merefleksikan
-    indeks_lama (karena dihitung dari histori sebelum kenaikan berlaku). Untuk bulan
-    >= bulan_rapel: dikalikan (indeks_baru/indeks_lama). Untuk bulan_rapel itu sendiri,
-    DITAMBAH rapel = akumulasi selisih (indeks_baru-indeks_lama)/indeks_lama x baseline
-    bulan-bulan bulan_mulai..bulan_rapel-1 (yang secara substansi sudah harus naik tapi
-    belum dibayar). Bulan antara bulan_mulai..bulan_rapel-1 sendiri TETAP di indeks lama
-    (baru dibayar penuh + rapel saat bulan_rapel), sesuai praktik umum pencairan rapel."""
+    PENTING -- anchor ke realisasi aktual pasca-kebijakan (bukan cuma kalikan baseline lama):
+    Baseline forecast bulan m dihitung dari PROFIL HISTORIS 5 tahun terakhir, yang otomatis
+    merefleksikan indeks_lama (krn histori itu dari sebelum kenaikan berlaku). Kalau kita
+    SELALU mengalikan baseline itu dengan faktor kenaikan, hasilnya bisa jauh meleset dari
+    level aktual pasca-kebijakan yang SUDAH TEREKAM di data tahun berjalan -- misalnya kalau
+    baseline historis bulan itu memang jauh lebih kecil dari level rutin pasca-kebijakan yang
+    riil (structural break yang tidak tertangkap oleh pola bulanan historis, hanya oleh
+    levelnya). Karena itu, begitu ADA bulan >= bulan_mulai yang realisasinya sudah tercatat di
+    data aktual tahun berjalan (biasanya bulan "berjalan" yang blm dianggap "penuh" secara
+    global -- lihat tentukan_bulan_penuh_terakhir_global -- tapi utk Belanja Pegawai realisasi
+    gaji/tunjangan lazimnya sudah tercatat penuh di awal bulan), bulan-bulan itu dipakai
+    sbg ANCHOR level pasca-kebijakan utk bulan-bulan berikutnya yang masih murni proyeksi --
+    BUKAN dikalikan lagi dgn faktor (mencegah double counting kenaikan yg sudah tercermin di
+    aktual). Kalau ada >1 bulan aktual pasca-kebijakan, dipakai MEDIAN (robust thd outlier spt
+    rapel/pembayaran susulan satu-kali) sbg anchor, bukan rerata sederhana atau balik ke
+    rata-rata historis sebelum kebijakan.
+
+    Baru kalau BELUM ADA sama sekali realisasi aktual pasca-kebijakan (murni proyeksi ke
+    depan), dipakai pendekatan lama: baseline historis (pra-kebijakan) x (indeks_baru/
+    indeks_lama), dengan opsi rapel = akumulasi selisih utk bulan_mulai..bulan_rapel-1 yang
+    dibayarkan penuh di bulan_rapel."""
     hasil = baseline_bulanan.copy()
     keterangan = []
     aturan_cocok = _cocokkan_kebijakan(kddept, akun, tahun_y)
@@ -161,21 +176,57 @@ def _terapkan_kebijakan(
         idx_lama, idx_baru = aturan["indeks_lama"], aturan["indeks_baru"]
         bln_mulai, bln_rapel = aturan["bulan_mulai"], aturan["bulan_rapel"]
         faktor = idx_baru / idx_lama if idx_lama else 1.0
-        rapel_total = 0.0
-        for m in range(bln_mulai, bln_rapel):  # bulan2 sebelum rapel diproses (index 1..12)
-            if m - 1 >= bulan_penuh_terakhir:  # hanya hitung dari porsi yang masih proyeksi
-                rapel_total += hasil[m - 1] * (faktor - 1.0)
-        for m in range(bln_rapel, 13):
-            if m - 1 < bulan_penuh_terakhir:
-                continue
-            hasil[m - 1] = hasil[m - 1] * faktor
-            if m == bln_rapel:
-                hasil[m - 1] += rapel_total
-        if rapel_total > 0 or any(m - 1 >= bulan_penuh_terakhir for m in range(bln_mulai, 13)):
-            keterangan.append(
-                f"{aturan['nama']}: indeks {idx_lama:.0%}→{idx_baru:.0%} efektif bulan "
-                f"{bln_mulai}, rapel dibayar bulan {bln_rapel} (+Rp {rapel_total:,.0f})"
-            )
+
+        # Bulan >= bulan_mulai yang realisasinya SUDAH ADA di data aktual tahun berjalan
+        # (nilai tidak nol/NaN) -- ini sudah mencerminkan indeks baru apa adanya.
+        bulan_aktual_pasca = [
+            m for m in range(bln_mulai, 13)
+            if m - 1 < len(aktual_bulanan)
+            and not np.isnan(aktual_bulanan[m - 1])
+            and aktual_bulanan[m - 1] != 0
+        ]
+
+        if bulan_aktual_pasca:
+            nilai_pasca = np.array([aktual_bulanan[m - 1] for m in bulan_aktual_pasca], dtype=float)
+            anchor = float(np.median(nilai_pasca))
+            for m in bulan_aktual_pasca:
+                # Jangan pernah mengubah bulan yang sudah py realisasi aktual -- pakai apa
+                # adanya (safety net; baseline pemanggil SEHARUSNYA sudah = aktual juga di sini,
+                # krn di-floor sebelum dipanggil, tapi dipastikan lagi di sini).
+                hasil[m - 1] = aktual_bulanan[m - 1]
+            bulan_diproyeksi = []
+            for m in range(bln_mulai, 13):
+                if m in bulan_aktual_pasca or m - 1 < bulan_penuh_terakhir:
+                    continue
+                hasil[m - 1] = anchor
+                bulan_diproyeksi.append(m)
+            if bulan_diproyeksi:
+                keterangan.append(
+                    f"{aturan['nama']}: level pasca-kebijakan dianchor dari "
+                    f"{len(bulan_aktual_pasca)} bulan realisasi aktual (median Rp {anchor:,.0f}"
+                    f"/bulan) untuk proyeksi bulan {min(bulan_diproyeksi)}-{max(bulan_diproyeksi)}, "
+                    f"bukan dikalikan ulang dari baseline pra-kebijakan"
+                )
+        else:
+            rapel_total = 0.0
+            for m in range(bln_mulai, bln_rapel):  # bulan2 sebelum rapel diproses (index 1..12)
+                if m - 1 >= bulan_penuh_terakhir:  # hanya hitung dari porsi yang masih proyeksi
+                    rapel_total += hasil[m - 1] * (faktor - 1.0)
+            diterapkan = False
+            for m in range(bln_rapel, 13):
+                if m - 1 < bulan_penuh_terakhir:
+                    continue
+                hasil[m - 1] = hasil[m - 1] * faktor
+                if m == bln_rapel:
+                    hasil[m - 1] += rapel_total
+                diterapkan = True
+            if diterapkan or rapel_total > 0:
+                keterangan.append(
+                    f"{aturan['nama']}: indeks {idx_lama:.0%}→{idx_baru:.0%} efektif bulan "
+                    f"{bln_mulai}, rapel dibayar bulan {bln_rapel} (+Rp {rapel_total:,.0f}) "
+                    f"[baseline historis pra-kebijakan x faktor -- belum ada realisasi aktual "
+                    f"pasca-kebijakan]"
+                )
     return hasil, keterangan
 
 
@@ -580,7 +631,9 @@ def hitung_forecast_satker_akun(df_all: pd.DataFrame, tahun_y: int) -> pd.DataFr
                     continue
                 baseline_12 = hasil_mat[i].copy()
                 baseline_12[bulan_forecast_mulai:] = forecast_depan[i]
-                baru, ket = _terapkan_kebijakan(baseline_12, bulan_forecast_mulai, kddept_arr[i], akun_arr[i], tahun_y)
+                baru, ket = _terapkan_kebijakan(
+                    baseline_12, bulan_forecast_mulai, aktual_mat[i], kddept_arr[i], akun_arr[i], tahun_y,
+                )
                 forecast_depan[i] = baru[bulan_forecast_mulai:]
                 if ket:
                     keterangan_list[i] = "; ".join(ket)
@@ -836,7 +889,54 @@ def deteksi_early_warning(
 
 
 # --------------------------------------------------------------------------
-# 6. Heatmap deviasi antar satker
+# 6. Audit khusus 1 satker (mis. 694900/ZIDAM) -- bandingkan aktual vs hasil per bulan
+# --------------------------------------------------------------------------
+
+def audit_satker(
+    df_forecast: pd.DataFrame, kdsatker: int = 694900, akun_pola: str | None = None,
+) -> pd.DataFrame:
+    """Audit rinci per bulan untuk satu satker (default 694900/ZIDAM XIX Tuanku Tambusai,
+    kasus satker baru Kementerian Pertahanan yang jadi acuan uji kenaikan tukin 512411),
+    opsional difilter ke akun tertentu via substring (mis. akun_pola="tunjangan khusus").
+
+    Return satu baris per (satker, akun, bulan) dgn kolom AKTUAL, HASIL (aktual utk bulan
+    yang sudah "penuh"/forecast utk bulan sisanya), SELISIH (HASIL-AKTUAL -- akan 0 utk bulan
+    yang sudah aktual, krn HASIL disamakan dgn AKTUAL persis di bulan tsb), plus konteks
+    SUMBER_PROFIL/CONFIDENCE/KETERANGAN_KEBIJAKAN/KETERANGAN_ANOMALI utk transparansi audit.
+    Dipakai utk QA manual: pastikan bulan yang statusnya aktual tidak pernah punya SELISIH != 0,
+    dan proyeksi pasca-kebijakan (mis. Okt-Des akun 512411) konsisten dgn level pasca-kenaikan."""
+    d = df_forecast[df_forecast["KDSATKER"] == kdsatker].copy()
+    if akun_pola:
+        d = d[d["AKUN"].str.contains(akun_pola, case=False, na=False)]
+    if d.empty:
+        return pd.DataFrame()
+
+    id_cols = [
+        "KDDEPT", "NMDEPT", "KDSATKER", "NMSATKER", "AKUN", "LABEL_JENIS_BELANJA",
+        "SUMBER_PROFIL", "CONFIDENCE", "N_TAHUN", "KETERANGAN_KEBIJAKAN",
+        "KETERANGAN_ANOMALI", "BULAN_PENUH_TERAKHIR",
+    ]
+    akt = d.melt(id_vars=id_cols, value_vars=[f"AKT_{c}" for c in BULAN_KOLOM],
+                 var_name="BULAN", value_name="AKTUAL")
+    akt["BULAN"] = akt["BULAN"].str.replace("AKT_", "", regex=False)
+    hsl = d.melt(id_vars=id_cols, value_vars=[f"HASIL_{c}" for c in BULAN_KOLOM],
+                 var_name="BULAN", value_name="HASIL")
+    hsl["BULAN"] = hsl["BULAN"].str.replace("HASIL_", "", regex=False)
+
+    audit = akt.merge(hsl, on=id_cols + ["BULAN"])
+    audit["BULAN_KE"] = audit["BULAN"].map({c: i + 1 for i, c in enumerate(BULAN_KOLOM)})
+    audit["STATUS"] = np.where(
+        audit["BULAN_KE"] <= audit["BULAN_PENUH_TERAKHIR"], "Aktual (penuh)",
+        np.where(audit["AKTUAL"] != 0, "Aktual (berjalan)", "Forecast"),
+    )
+    audit["SELISIH"] = audit["HASIL"] - audit["AKTUAL"]
+    audit = audit.sort_values(["KDSATKER", "AKUN", "BULAN_KE"]).drop(columns=["BULAN_KE"])
+    kolom_akhir = id_cols + ["BULAN", "STATUS", "AKTUAL", "HASIL", "SELISIH"]
+    return audit[kolom_akhir].reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------
+# 7. Heatmap deviasi antar satker
 # --------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
