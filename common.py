@@ -387,12 +387,18 @@ def require_login(df_all: pd.DataFrame, judul_halaman: str = "Dashboard"):
         st.session_state.auth = None
 
     if st.session_state.auth is None:
-        # Saat belum login, app.py berhenti (st.stop()) SEBELUM sempat memanggil
-        # st.navigation(pages) -- akibatnya Streamlit menampilkan navigasi bawaan
-        # (daftar nama file di folder pages/) di sidebar. CSS ini menyembunyikan
-        # navigasi bawaan itu supaya sidebar bersih selama di layar login.
+        # Saat belum login: matikan navigasi sidebar OTOMATIS bawaan Streamlit (yang kalau
+        # dibiarkan bisa menampilkan daftar nama file mentah dari folder pages/ ke siapa
+        # saja, termasuk yang belum login -- terutama tepat setelah reboot/redeploy, sebelum
+        # ada satu pun sesi yang sempat memanggil st.navigation()). client.showSidebarNavigation
+        # ini HANYA di-set False di cabang ini (belum login); begitu sudah login, kode di
+        # cabang else di bawah men-set-nya balik ke True supaya navigasi custom kita sendiri
+        # (dibangun lewat st.navigation(pages) di app.py) tetap muncul seperti biasa.
+        st.set_option("client.showSidebarNavigation", False)
+        # CSS ini sbg lapisan cadangan tambahan (kalau st.set_option di atas krn suatu hal
+        # belum sempat berlaku pada render pertama).
         st.markdown(
-            "<style>[data-testid='stSidebarNav'] {display: none;}</style>",
+            "<style>[data-testid='stSidebarNav'] {display: none !important;}</style>",
             unsafe_allow_html=True,
         )
         st.title(f"🔐 Login {judul_halaman}")
@@ -412,6 +418,10 @@ def require_login(df_all: pd.DataFrame, judul_halaman: str = "Dashboard"):
             else:
                 st.error("Username atau password salah, atau kode satker tidak ditemukan di data.")
         st.stop()
+
+    # Sudah login: pastikan navigasi sidebar dinyalakan lagi (lihat catatan di cabang if
+    # di atas) supaya st.navigation(pages) di app.py bisa menampilkan menu halaman normal.
+    st.set_option("client.showSidebarNavigation", True)
 
     auth = st.session_state.auth
     is_super = auth["role"] == "super"
