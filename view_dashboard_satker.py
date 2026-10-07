@@ -274,6 +274,38 @@ with p2:
 
 st.subheader("Tren & Proyeksi Realisasi hingga Akhir Tahun")
 
+# Dropdown jenis belanja: "Semua" = total seperti sebelumnya; atau pilih satu jenis belanja
+# (urut kode akun: 51 Pegawai, 52 Barang, 53 Modal, dst). Aktual per jenis diambil dari data
+# satker; proyeksinya dari hasil forecast hybrid per jenis (agg_kategori) -- sama dengan angka
+# di tabel "Realisasi Bulanan per Jenis Belanja" di bawah.
+_SEMUA_JENIS = "Semua Jenis Belanja"
+_opsi_jenis = (
+    df_satker[["JENIS BELANJA", "LABEL_JENIS_BELANJA"]]
+    .drop_duplicates()
+    .sort_values("JENIS BELANJA")["LABEL_JENIS_BELANJA"]
+    .tolist()
+)
+jenis_dipilih = st.selectbox(
+    "Jenis Belanja", [_SEMUA_JENIS] + _opsi_jenis, key="tren_jenis_belanja",
+)
+
+if jenis_dipilih == _SEMUA_JENIS:
+    monthly_chart = monthly
+    hasil_chart = total_bulanan_hasil
+else:
+    monthly_chart = df_satker.loc[
+        df_satker["LABEL_JENIS_BELANJA"] == jenis_dipilih, BULAN_KOLOM
+    ].sum()
+    if not agg_kategori.empty and jenis_dipilih in agg_kategori.index:
+        hasil_chart = agg_kategori.loc[jenis_dipilih, BULAN_KOLOM].astype(float)
+    else:
+        # Fallback (tidak ada hasil forecast utk jenis ini): rata-rata bulan berjalan
+        _rerata_jenis = (
+            monthly_chart.cumsum().iloc[bulan_terakhir - 1] / bulan_terakhir
+            if bulan_terakhir else 0
+        )
+        hasil_chart = pd.Series([_rerata_jenis] * 12, index=BULAN_KOLOM)
+
 bulan_angka = list(range(1, 13))
 
 
@@ -282,10 +314,10 @@ bulan_angka = list(range(1, 13))
 # putus-putus) memakai nilai HASIL forecast hybrid bulan itu (total_bulanan_hasil), BUKAN
 # realisasi parsial yang sudah tercatat sejauh ini -- walaupun datanya sudah tidak nol.
 def _nilai_proyeksi_bulan(b):
-    return total_bulanan_hasil[BULAN_KOLOM[b - 1]]
+    return hasil_chart[BULAN_KOLOM[b - 1]]
 
 
-aktual = [monthly.values[b - 1] if b <= bulan_penuh_terakhir_tampilan else None for b in bulan_angka]
+aktual = [monthly_chart.values[b - 1] if b <= bulan_penuh_terakhir_tampilan else None for b in bulan_angka]
 proyeksi = []
 for b in bulan_angka:
     if bulan_penuh_terakhir_tampilan == 0:
@@ -294,7 +326,7 @@ for b in bulan_angka:
     elif b < bulan_penuh_terakhir_tampilan:
         proyeksi.append(None)
     elif b == bulan_penuh_terakhir_tampilan:
-        proyeksi.append(monthly.values[b - 1])  # titik sambung dengan garis aktual
+        proyeksi.append(monthly_chart.values[b - 1])  # titik sambung dengan garis aktual
     else:
         proyeksi.append(_nilai_proyeksi_bulan(b))
 
@@ -309,7 +341,10 @@ fig_trend.add_trace(go.Scatter(
     name="Proyeksi (rata-rata bulanan)",
     line=dict(dash="dash", shape="spline", smoothing=1.1),
 ))
-fig_trend.update_layout(yaxis_title="Rupiah (per bulan)", xaxis_title=None)
+fig_trend.update_layout(
+    yaxis_title="Rupiah (per bulan)", xaxis_title=None,
+    title=None if jenis_dipilih == _SEMUA_JENIS else dict(text=jenis_dipilih, x=0.01),
+)
 st.plotly_chart(fig_trend, use_container_width=True)
 
 _catatan_bulan_berjalan = ""
