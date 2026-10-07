@@ -81,7 +81,7 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
 # openai/gpt-oss-120b kadang tidak stabil untuk tool/function calling di Groq (error
 # "tool_use_failed" / 400 BadRequestError sudah dilaporkan komunitas Groq). Kalau panggilan
 # ber-tool gagal, dicoba ulang sekali pakai model cadangan ini.
-GROQ_MODEL_FALLBACK_TOOLS = os.environ.get("GROQ_MODEL_FALLBACK_TOOLS", "moonshotai/kimi-k2-instruct-0905")
+GROQ_MODEL_FALLBACK_TOOLS = os.environ.get("GROQ_MODEL_FALLBACK_TOOLS", "whisper-large-v3-turbo")
 
 BOBOT_TAHUN = {1: 0.50, 2: 0.25, 3: 0.125, 4: 0.0625, 5: 0.0625}
 
